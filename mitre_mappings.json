@@ -1,0 +1,8 @@
+{
+  "AML.T0001: Prompt Injection": "✅ Mitigated",
+  "AML.T0002: Data Poisoning": "⚠️ Partially",
+  "AML.T0003: Model Evasion": "❌ Not",
+  "AML.T0004: Model Theft": "❌ Not",
+  "AML.T0005: Exfiltration": "⚠️ Partially",
+  "AML.T0006: Reconnaissance": "✅ Mitigated"
+}

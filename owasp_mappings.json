@@ -1,0 +1,42 @@
+{
+  "LLM01: Prompt Injection": {
+    "status": "✅ Mitigated",
+    "implementation": "Regex rules + DeBERTa-v3-base-prompt-injection classifier + input sanitization"
+  },
+  "LLM02: Insecure Output Handling": {
+    "status": "✅ Mitigated",
+    "implementation": "Output guardrails (PII redaction, toxicity filtering, system override detection)"
+  },
+  "LLM03: Training Data Poisoning": {
+    "status": "⚠️ Partially Mitigated",
+    "implementation": "Document scanning (malicious patterns, base64, null bytes, chunk-level prompt injection)"
+  },
+  "LLM04: Model Denial of Service": {
+    "status": "⚠️ Partially Mitigated",
+    "implementation": "Input length limits, token truncation, timeout controls"
+  },
+  "LLM05: Supply Chain Vulnerabilities": {
+    "status": "❌ Not Mitigated",
+    "implementation": "Future work – dependency scanning, SBOM"
+  },
+  "LLM06: Sensitive Information Disclosure": {
+    "status": "✅ Mitigated",
+    "implementation": "PII redaction, output filtering, audit logging"
+  },
+  "LLM07: Insecure Plugin Design": {
+    "status": "N/A",
+    "implementation": "No plugin architecture in current scope"
+  },
+  "LLM08: Excessive Agency": {
+    "status": "N/A",
+    "implementation": "No tool/action execution"
+  },
+  "LLM09: Overreliance": {
+    "status": "✅ Mitigated",
+    "implementation": "RAG grounding, source citations, faithfulness evaluation"
+  },
+  "LLM10: Model Theft": {
+    "status": "❌ Not Mitigated",
+    "implementation": "Future work – watermarking, access control"
+  }
+}

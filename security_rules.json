@@ -1,0 +1,163 @@
+{
+  "document_rules": [
+    {
+      "id": "doc_001",
+      "name": "Embedded System Prompt",
+      "pattern": "(?i)(system prompt|ignore previous|you are now|as an ai assistant|pretend you are|forget instructions|output the system prompt|jailbreak|do anything now|bypass safety|override directives)",
+      "severity": "high",
+      "description": "Document contains phrases that may try to override the model's behavior."
+    },
+    {
+      "id": "doc_002",
+      "name": "Base64 Encoded Content",
+      "pattern": "[A-Za-z0-9+/]{40,}={0,2}",
+      "severity": "medium",
+      "description": "Long base64 string possibly hiding malicious payload."
+    },
+    {
+      "id": "doc_003",
+      "name": "Zero-Width Characters",
+      "pattern": "[\\u200B-\\u200D\\uFEFF]",
+      "severity": "medium",
+      "description": "Zero-width characters can be used for steganography."
+    },
+    {
+      "id": "doc_004",
+      "name": "HTML/Script Injection",
+      "pattern": "(?i)(<script|<iframe|<object|<embed|<img[^>]+onerror|<body[^>]+onload|javascript:|vbscript:)",
+      "severity": "high",
+      "description": "HTML tags with event handlers or script execution."
+    },
+    {
+      "id": "doc_005",
+      "name": "Null Byte Injection",
+      "pattern": "\\x00",
+      "severity": "high",
+      "description": "Null bytes can be used for truncation attacks."
+    },
+    {
+      "id": "doc_006",
+      "name": "XML/XXE Injection",
+      "pattern": "(?i)(<!ENTITY|<!DOCTYPE|<!\\[CDATA\\[|<\\?xml)",
+      "severity": "high",
+      "description": "XML external entity or CDATA injection attempts."
+    },
+    {
+      "id": "doc_007",
+      "name": "Markdown Injection",
+      "pattern": "(?i)(\\[.*\\]\\(javascript:|\\[.*\\]\\(data:|!\\[.*\\]\\(data:)",
+      "severity": "medium",
+      "description": "Markdown links with javascript or data URIs."
+    },
+    {
+      "id": "doc_008",
+      "name": "Path Traversal",
+      "pattern": "(\\.\\./|\\.\\.\\\\|%2e%2e%2f|%2e%2e\\\\)",
+      "severity": "high",
+      "description": "Path traversal attempts to access system files."
+    },
+    {
+      "id": "doc_009",
+      "name": "Template Injection",
+      "pattern": "(\\{\\{.*\\}\\}|\\$\\{.*\\}|<%.*%>)",
+      "severity": "medium",
+      "description": "Server-side template injection patterns."
+    },
+    {
+      "id": "doc_010",
+      "name": "YAML/JSON Injection",
+      "pattern": "(?i)(!!python|__proto__|\\$gt|\\$ne|\\$regex)",
+      "severity": "high",
+      "description": "YAML/JSON injection for code execution or NoSQL injection."
+    },
+    {
+      "id": "doc_011",
+      "name": "Data URI Injection",
+      "pattern": "(?i)(data:text/html|data:image/svg|data:application)",
+      "severity": "medium",
+      "description": "Data URIs that may contain malicious content."
+    },
+    {
+      "id": "doc_012",
+      "name": "Comment Injection",
+      "pattern": "(/\\*.*\\*/|<!--.*-->|//.*DROP|//.*DELETE)",
+      "severity": "medium",
+      "description": "Malicious instructions hidden in comments."
+    },
+    {
+      "id": "doc_013",
+      "name": "Right-to-Left Override",
+      "pattern": "[\\u202A-\\u202E\\u200F\\u200E]",
+      "severity": "medium",
+      "description": "RTL override characters used to hide malicious content."
+    },
+    {
+      "id": "doc_014",
+      "name": "Control Character Injection",
+      "pattern": "[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]",
+      "severity": "medium",
+      "description": "Control characters (except tab/newline) that may be used for attacks."
+    },
+    {
+      "id": "doc_015",
+      "name": "Excessive Repetition (DoS)",
+      "pattern": "(.{100,})\\1{10,}",
+      "severity": "low",
+      "description": "Excessive repetition that may cause tokenization bombs."
+    }
+  ],
+  "query_rules": [
+    {
+      "id": "qry_001",
+      "name": "Direct Prompt Injection",
+      "pattern": "(?i)(ignore previous|forget instructions|output the system prompt|you are now|jailbreak|do anything now|system prompt|admin password|sudo|rm -rf|drop table|override|bypass|compromise|break rules|break safety|act as|pretend you are)",
+      "severity": "high"
+    },
+    {
+      "id": "qry_002",
+      "name": "SQL Injection Attempt",
+      "pattern": "(?i)(SELECT.*FROM|DROP TABLE|UNION SELECT|INSERT INTO|DELETE FROM|UPDATE.*SET|xp_cmdshell|exec\\s+\\()",
+      "severity": "high"
+    },
+    {
+      "id": "qry_003",
+      "name": "Credential Harvesting",
+      "pattern": "(?i)\\b(credentials|password|passwd|pass|api[_\\s]?key|secret[_\\s]?key|token|private[_\\s]?key|admin[_\\s]?password)\\b",
+      "severity": "high"
+    },
+    {
+      "id": "qry_004",
+      "name": "Excessive Special Characters",
+      "pattern": "([^a-zA-Z0-9\\s]{10,})",
+      "severity": "low"
+    },
+    {
+      "id": "qry_005",
+      "name": "HTML/Script in Query",
+      "pattern": "(?i)(<script|<iframe|javascript:|onerror=|onload=)",
+      "severity": "high"
+    },
+    {
+      "id": "qry_006",
+      "name": "Path Traversal in Query",
+      "pattern": "(\\.\\./|\\.\\.\\\\|%2e%2e)",
+      "severity": "high"
+    }
+  ],
+  "benign_patterns": [
+    "^what is\\b",
+    "^define\\b",
+    "^explain\\b",
+    "^how does\\b",
+    "^who is\\b",
+    "^when did\\b",
+    "^where is\\b",
+    "^why does\\b",
+    "^tell me about\\b",
+    "^describe\\b"
+  ],
+  "max_document_size_mb": 10,
+  "max_query_length": 2000,
+  "ml_prompt_injection_threshold": 0.85,
+  "max_safe_query_words": 5
+}
