@@ -26,7 +26,6 @@ class RAGService:
         return cls._instance
 
     def __init__(self):
-        # AUTOMATIC SAFEGUARD: Prevents re-initialization if already loaded
         if getattr(self, "_initialized", False):
             return
         self._initialized = True
@@ -57,6 +56,7 @@ class RAGService:
         for doc in docs:
             try:
                 chunks = self._chunk_document(doc.get("content", ""))
+                uploader = doc.get("uploaded_by", "unknown")
                 for chunk in chunks:
                     h = hashlib.md5(chunk.encode()).hexdigest()
                     if h not in self.global_chunk_hashes:
@@ -67,6 +67,7 @@ class RAGService:
                                 "text": chunk,
                                 "source": doc.get("filename", "unknown"),
                                 "chunk_id": h,
+                                "uploaded_by": uploader,
                             }
                         )
             except Exception as e:
@@ -139,12 +140,15 @@ class RAGService:
 
         embeddings = self._get_embeddings(unique_chunks)
         base_meta = metadata or {"source": "unknown"}
+
+        # CRITICAL: Tag every chunk with the uploader's username for multi-tenant isolation
         meta_list = [
             {
                 "text": chunk,
                 "source": base_meta.get("source", "unknown"),
                 "category": base_meta.get("category", "general"),
                 "chunk_id": hashlib.md5(chunk.encode()).hexdigest(),
+                "uploaded_by": uploaded_by,
             }
             for chunk in unique_chunks
         ]
@@ -174,10 +178,12 @@ class RAGService:
                 return
             supabase_id = res.data[0]["id"]
 
+            # CRITICAL: Pass uploaded_by so vectors are tagged for isolation
             cloud_storage.store_vectors(
                 embeddings=embeddings.tolist(),
                 metadatas=meta_list,
                 document_id=supabase_id,
+                uploaded_by=uploaded_by,
             )
         else:
             if self.vector_store is None:
@@ -193,19 +199,32 @@ class RAGService:
             self.processed_hashes.add(file_hash)
             self.save()
 
-    def retrieve(self, query: str, filters: Dict = None, k: int = None) -> List[Dict]:
+    def retrieve(
+        self, query: str, filters: Dict = None, k: int = None, username: str = None
+    ) -> List[Dict]:
+        """
+        Retrieve documents with strict multi-tenant isolation.
+        If username is provided, ONLY documents uploaded by that user are returned.
+        """
         if k is None:
             k = settings.TOP_K_DENSE
         query_emb = self._get_embeddings([query])
+
         if self.use_cloud:
+            # CRITICAL: Pass username to enforce tenant isolation in Qdrant
             dense_docs = cloud_storage.search_vectors(
-                query_embedding=query_emb[0].tolist(), k=k
+                query_embedding=query_emb[0].tolist(), k=k, uploaded_by=username
             )
         else:
             if self.vector_store is None or self.vector_store.index.ntotal == 0:
                 return []
             dense_results = self.vector_store.search(query_emb, k)
-            dense_docs = [r["metadata"] for r in dense_results]
+            # CRITICAL: Filter local results by username
+            dense_docs = [
+                r["metadata"]
+                for r in dense_results
+                if not username or r["metadata"].get("uploaded_by") == username
+            ]
 
         bm25_docs = []
         if self.bm25:
@@ -214,7 +233,10 @@ class RAGService:
             top_indices = np.argsort(scores)[-settings.TOP_K_BM25 :][::-1]
             for idx in top_indices:
                 if idx < len(self.metadata):
-                    bm25_docs.append(self.metadata[idx])
+                    meta = self.metadata[idx]
+                    # CRITICAL: Filter BM25 results by username
+                    if not username or meta.get("uploaded_by") == username:
+                        bm25_docs.append(meta)
 
         fused = self._reciprocal_rank_fusion(dense_docs, bm25_docs)
         if filters:
@@ -245,7 +267,7 @@ class RAGService:
 
     def generate(self, query: str, context: List[Dict]) -> str:
         if not context:
-            return "No relevant documents found."
+            return "No relevant documents found in your knowledge base. Please upload documents to get started."
 
         context_text = "\n\n".join(
             [f"Document {i + 1}:\n{c['text']}" for i, c in enumerate(context)]
@@ -305,7 +327,7 @@ Answer:"""
 
     def generate_stream(self, query: str, context: List[Dict]):
         if not context:
-            yield "No relevant documents found."
+            yield "No relevant documents found in your knowledge base. Please upload documents to get started."
             return
 
         context_text = "\n\n".join(

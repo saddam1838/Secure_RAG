@@ -1,82 +1,110 @@
 import gradio as gr
 from services.rag_service import RAGService
 from services.security_service import SecurityGuard
+from services.audit_service import AuditService
+from guardrails import Guardrail
 from config import settings
 
 rag = RAGService()
-security = SecurityGuard()
+guard = SecurityGuard()
+audit = AuditService()
+guardrail = Guardrail()
 
 
-def chat_response(message, history):
-    history.append({"role": "user", "content": message})
-    yield history
+def chat_fn(message, history, username):
+    """Main chat function with multi-tenant isolation."""
+    if not message or not message.strip():
+        return "Please enter a message."
 
-    # Check if knowledge base is empty
-    if len(rag.corpus) == 0:
-        history.append(
+    # Sanitize input
+    message = guard.sanitize_input(message)
+
+    # Layer 1: Regex scan
+    query_issues = guard.scan_query(message)
+    if query_issues:
+        audit.log(
+            username,
+            "query_blocked",
             {
-                "role": "assistant",
-                "content": "📚 **No documents in knowledge base.**\n\nUpload documents via the **Secure Upload** tab to begin.",
-            }
+                "query": message[:100],
+                "method": "regex",
+                "issues": [i["name"] for i in query_issues],
+            },
         )
-        yield history
-        return
+        return "🛑 **Query blocked.** Matched security policy."
 
-    # Security check
-    pi_score = security.detect_prompt_injection(message)
-    eval_result = security.should_block_query_advanced(message, pi_score)
+    # Layer 2: ML classifier
+    ml_score = guard.detect_prompt_injection(message)
 
+    # Layer 3: Advanced evaluation (regex + ML + LLM)
+    eval_result = guard.should_block_query_advanced(message, ml_score)
     if eval_result["blocked"]:
-        # SECURITY: Do not expose which detection method blocked the query
-        # This prevents attackers from learning how to bypass specific layers
-        history.append(
+        audit.log(
+            username,
+            "query_blocked",
             {
-                "role": "assistant",
-                "content": f"🛑 **Query blocked.** {eval_result['reason']}",
-            }
+                "query": message[:100],
+                "method": eval_result["method"],
+                "reason": eval_result["reason"],
+                "ml_score": round(ml_score, 3),
+            },
         )
-        yield history
-        return
+        return "🛑 **Query blocked.**"
 
-    # RAG pipeline
-    safe_query = security.sanitize_input(message)
-    chunks = rag.retrieve(safe_query, k=settings.TOP_K_DENSE)
+    # CRITICAL: Retrieve documents ONLY for this specific user (multi-tenant isolation)
+    context = rag.retrieve(message, k=settings.TOP_K_DENSE, username=username)
 
-    if not chunks:
-        history.append(
-            {
-                "role": "assistant",
-                "content": "No relevant information found in the uploaded documents. Try rephrasing your question or uploading additional documents.",
-            }
-        )
-        yield history
-        return
+    if not context:
+        audit.log(username, "no_context_found", {"query": message[:100]})
+        return "No relevant documents found in your knowledge base. Please upload documents to get started."
 
-    chunks = rag.rerank(safe_query, chunks)
-    full_response = ""
-    history.append({"role": "assistant", "content": ""})
+    # Generate response
+    response = rag.generate(message, context)
 
-    for token in rag.generate_stream(safe_query, chunks):
-        full_response += token
-        history[-1]["content"] = full_response
-        yield history
+    # Output guardrail: redact PII and harmful content
+    guarded = guardrail.sanitize_output(response)
+    final_response = guarded["cleaned"]
+
+    audit.log(
+        username,
+        "query_answered",
+        {
+            "query": message[:100],
+            "chunks_used": len(context),
+            "sources": [c.get("source", "unknown") for c in context[:3]],
+        },
+    )
+
+    return final_response
 
 
 def chat_interface(user_state):
-    with gr.Tab("Ask"):
-        # Show knowledge base status
-        kb_status = (
-            f"📚 Knowledge Base: {len(rag.corpus):,} chunks loaded"
-            if len(rag.corpus) > 0
-            else "⚠️ Knowledge Base: Empty (upload documents first)"
+    """Create the chat interface tab."""
+    with gr.Tab("💬 Chat"):
+        gr.Markdown("### 💬 Secure RAG Chat")
+        gr.Markdown(
+            "Ask questions about your uploaded documents. Responses are grounded in your "
+            "knowledge base with full source citations. All queries are scanned for security threats."
         )
-        gr.Markdown(kb_status)
 
-        chatbot = gr.Chatbot(label="Conversation", height=400)
-        msg = gr.Textbox(label="Your Question", placeholder="Ask anything...")
-        clear = gr.Button("Clear Chat")
+        # Use Gradio's built-in ChatInterface for a clean UX
+        chatbot = gr.ChatInterface(
+            fn=lambda message, history, request: chat_fn(
+                message,
+                history,
+                request.username
+                if hasattr(request, "username") and request.username
+                else "admin",
+            ),
+            examples=[
+                "Summarize the main points from my documents",
+                "What are the key findings?",
+                "Explain the methodology used",
+            ],
+            title=None,
+            retry_btn="🔄 Retry",
+            undo_btn="↩️ Undo",
+            clear_btn="🗑️ Clear",
+        )
 
-        msg.submit(chat_response, [msg, chatbot], chatbot)
-        clear.click(lambda: [], None, chatbot)
-
-        user_state.change(lambda: [], None, chatbot)
+    return chatbot

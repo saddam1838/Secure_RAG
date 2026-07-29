@@ -42,7 +42,6 @@ def _get_cached_rag_quality():
 
         rag = RAGService()
 
-        # Check if SYSTEM has any documents at all
         if len(rag.corpus) == 0:
             result = {
                 "has_documents": False,
@@ -136,7 +135,7 @@ class SecurityScorer:
         )
         attack_by_type = benchmark.get("by_type", {})
 
-        # 2. Document Attack Resistance (15%) - scanner detection rate
+        # 2. Document Attack Resistance (15%)
         doc_attack_result = _get_cached_document_security()
         doc_attack_score = doc_attack_result.get("detection_rate", 0)
         doc_attack_total = doc_attack_result.get("total", 0)
@@ -219,7 +218,7 @@ class SecurityScorer:
 
     @staticmethod
     def calculate_user_documents_score(username: str = "admin") -> dict:
-        """User-specific document stats only - no scanner test data."""
+        """User-specific document stats with strict multi-tenant isolation."""
         total_scans = 0
         safe_scans = 0
         unsafe_documents = []
@@ -227,9 +226,10 @@ class SecurityScorer:
 
         if cloud_storage.is_cloud_enabled:
             try:
+                # CRITICAL: Only fetch documents uploaded by THIS user
                 all_docs = (
                     cloud_storage.supabase.table("documents")
-                    .select("id, is_safe, filename")
+                    .select("id, is_safe, filename, uploaded_by")
                     .eq("uploaded_by", username)
                     .execute()
                     .data
@@ -243,20 +243,30 @@ class SecurityScorer:
                 from services.rag_service import RAGService
 
                 rag = RAGService()
-                user_filenames = [d.get("filename") for d in all_docs]
-                total_chunks = sum(
-                    1 for m in rag.metadata if m.get("source") in user_filenames
-                )
+
+                # CRITICAL: Count chunks that belong to THIS user ONLY
+                if total_scans == 0:
+                    total_chunks = 0
+                else:
+                    user_filenames = [d.get("filename") for d in all_docs]
+                    total_chunks = sum(
+                        1
+                        for m in rag.metadata
+                        if m.get("source") in user_filenames
+                        and m.get("uploaded_by") == username
+                    )
             except Exception as e:
                 print(f"⚠️ Failed to fetch document stats: {e}")
         else:
             from services.rag_service import RAGService
 
             rag = RAGService()
-            user_files = set(m.get("source") for m in rag.metadata)
+            # CRITICAL: Only count chunks uploaded by this user
+            user_chunks = [m for m in rag.metadata if m.get("uploaded_by") == username]
+            user_files = set(m.get("source") for m in user_chunks)
             total_scans = len(user_files)
             safe_scans = total_scans
-            total_chunks = len(rag.corpus)
+            total_chunks = len(user_chunks)
 
         # HONEST: No documents = 0% score
         if total_scans == 0:
@@ -315,7 +325,6 @@ class SecurityScorer:
         rag_score = _get_cached_rag_quality()
 
         # FIX: If current user has no documents, RAG Quality should also show "No Documents"
-        # (Even if other users have documents, from this user's perspective there's nothing to evaluate)
         user_rag_score = rag_score
         if user_score["stats"]["documents_scanned"] == 0:
             user_rag_score = {
@@ -355,7 +364,7 @@ class SecurityScorer:
             "color": color,
             "system_capability": system_score,
             "user_documents": user_score,
-            "rag_quality": user_rag_score,  # Use user-specific RAG score
+            "rag_quality": user_rag_score,
             "breakdown": {
                 "System Capability": round(system_score["overall_score"], 1),
                 "User Documents": round(user_score["overall_score"], 1),

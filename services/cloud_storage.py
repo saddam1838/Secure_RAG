@@ -1,5 +1,6 @@
 """
 Cloud Storage Service - Enterprise-grade persistence using Qdrant + Supabase.
+With multi-tenant data isolation support.
 """
 
 import os
@@ -60,16 +61,17 @@ class CloudStorageService:
                     f"✅ Connected to Qdrant collection: {settings.QDRANT_COLLECTION}"
                 )
 
-            # FIX: Create a payload index for 'document_id' so we can filter/delete by it
-            try:
-                self.qdrant.create_payload_index(
-                    collection_name=settings.QDRANT_COLLECTION,
-                    field_name="document_id",
-                    field_schema=PayloadSchemaType.KEYWORD,
-                )
-                print("✅ Created Qdrant payload index for 'document_id'")
-            except Exception:
-                pass  # Index already exists, which is fine
+            # Create payload indexes for filtering
+            for field_name in ["document_id", "uploaded_by"]:
+                try:
+                    self.qdrant.create_payload_index(
+                        collection_name=settings.QDRANT_COLLECTION,
+                        field_name=field_name,
+                        field_schema=PayloadSchemaType.KEYWORD,
+                    )
+                    print(f"✅ Created Qdrant payload index for '{field_name}'")
+                except Exception:
+                    pass  # Index already exists, which is fine
 
             self.supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
             print("✅ Connected to Supabase")
@@ -193,8 +195,13 @@ class CloudStorageService:
             return False, f"Deletion failed: {str(e)}"
 
     def store_vectors(
-        self, embeddings: List[List[float]], metadatas: List[Dict], document_id: str
+        self,
+        embeddings: List[List[float]],
+        metadatas: List[Dict],
+        document_id: str,
+        uploaded_by: str,
     ) -> bool:
+        """Store vectors with multi-tenant isolation tag."""
         if not self.is_cloud_enabled:
             return False
         try:
@@ -205,7 +212,12 @@ class CloudStorageService:
                     PointStruct(
                         id=point_id,
                         vector=emb,
-                        payload={**meta, "document_id": document_id},
+                        # CRITICAL: Tag every vector with the uploader's username for isolation
+                        payload={
+                            **meta,
+                            "document_id": document_id,
+                            "uploaded_by": uploaded_by,
+                        },
                     )
                 )
             self.qdrant.upsert(
@@ -220,15 +232,21 @@ class CloudStorageService:
         self,
         query_embedding: List[float],
         k: int = 10,
-        user_filter: Optional[str] = None,
+        uploaded_by: Optional[str] = None,
     ) -> List[Dict]:
+        """Search vectors with strict multi-tenant isolation."""
         if not self.is_cloud_enabled:
             return []
 
         search_filter = None
-        if user_filter:
+        if uploaded_by:
+            # CRITICAL: Only return documents uploaded by this specific user
             search_filter = Filter(
-                must=[FieldCondition(key="source", match=MatchValue(value=user_filter))]
+                must=[
+                    FieldCondition(
+                        key="uploaded_by", match=MatchValue(value=uploaded_by)
+                    )
+                ]
             )
 
         results = self.qdrant.query_points(
@@ -245,6 +263,7 @@ class CloudStorageService:
                 "source": r.payload.get("source", "unknown"),
                 "category": r.payload.get("category", "general"),
                 "chunk_id": r.payload.get("chunk_id", str(r.id)),
+                "uploaded_by": r.payload.get("uploaded_by", "unknown"),
                 "score": r.score,
             }
             for r in results.points
