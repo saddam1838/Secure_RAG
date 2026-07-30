@@ -41,7 +41,7 @@ class CloudStorageService:
 
     def _connect(self):
         if not settings.USE_CLOUD_STORAGE:
-            print("️ Cloud storage disabled. Using local fallback.")
+            print("⚠️ Cloud storage disabled. Using local fallback.")
             return
 
         try:
@@ -57,9 +57,7 @@ class CloudStorageService:
                 )
                 print(f"✅ Created Qdrant collection: {settings.QDRANT_COLLECTION}")
             else:
-                print(
-                    f"✅ Connected to Qdrant collection: {settings.QDRANT_COLLECTION}"
-                )
+                print(f"✅ Connected to Qdrant collection: {settings.QDRANT_COLLECTION}")
 
             # Create payload indexes for filtering
             for field_name in ["document_id", "uploaded_by"]:
@@ -71,7 +69,7 @@ class CloudStorageService:
                     )
                     print(f"✅ Created Qdrant payload index for '{field_name}'")
                 except Exception:
-                    pass  # Index already exists, which is fine
+                    pass  # Index already exists
 
             self.supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
             print("✅ Connected to Supabase")
@@ -84,9 +82,7 @@ class CloudStorageService:
     def is_cloud_enabled(self) -> bool:
         return self.qdrant is not None and self.supabase is not None
 
-    def register_user(
-        self, username: str, password_hash: str, role: str = "user"
-    ) -> Tuple[bool, str]:
+    def register_user(self, username: str, password_hash: str, role: str = "user") -> Tuple[bool, str]:
         if not self.is_cloud_enabled:
             return False, "Cloud storage not available"
         try:
@@ -102,35 +98,23 @@ class CloudStorageService:
     def get_user(self, username: str) -> Optional[Dict]:
         if not self.is_cloud_enabled:
             return None
-        result = (
-            self.supabase.table("users").select("*").eq("username", username).execute()
-        )
+        result = self.supabase.table("users").select("*").eq("username", username).execute()
         return result.data[0] if result.data else None
 
-    def save_document(
-        self,
-        filename: str,
-        file_hash: str,
-        content: str,
-        size_mb: float,
-        uploaded_by: str,
-        is_safe: bool,
-        scan_issues: List[Dict],
-    ) -> Tuple[bool, str]:
+    def save_document(self, filename: str, file_hash: str, content: str, size_mb: float, 
+                     uploaded_by: str, is_safe: bool, scan_issues: List[Dict]) -> Tuple[bool, str]:
         if not self.is_cloud_enabled:
             return False, "Cloud storage not available"
         try:
-            self.supabase.table("documents").insert(
-                {
-                    "filename": filename,
-                    "file_hash": file_hash,
-                    "content": content,
-                    "size_mb": size_mb,
-                    "uploaded_by": uploaded_by,
-                    "is_safe": is_safe,
-                    "scan_issues": json.dumps(scan_issues) if scan_issues else None,
-                }
-            ).execute()
+            self.supabase.table("documents").insert({
+                "filename": filename,
+                "file_hash": file_hash,
+                "content": content,
+                "size_mb": size_mb,
+                "uploaded_by": uploaded_by,
+                "is_safe": is_safe,
+                "scan_issues": json.dumps(scan_issues) if scan_issues else None,
+            }).execute()
             return True, "Document saved"
         except Exception as e:
             return False, str(e)
@@ -138,28 +122,20 @@ class CloudStorageService:
     def document_exists(self, file_hash: str) -> bool:
         if not self.is_cloud_enabled:
             return False
-        result = (
-            self.supabase.table("documents")
-            .select("id")
-            .eq("file_hash", file_hash)
-            .execute()
-        )
+        result = self.supabase.table("documents").select("id").eq("file_hash", file_hash).execute()
         return len(result.data) > 0
 
     def get_all_safe_documents(self) -> List[Dict]:
         if not self.is_cloud_enabled:
             return []
-        result = (
-            self.supabase.table("documents").select("*").eq("is_safe", True).execute()
-        )
+        result = self.supabase.table("documents").select("*").eq("is_safe", True).execute()
         return result.data
 
     def delete_document(self, document_id: str, username: str) -> Tuple[bool, str]:
-        """Securely delete a document. Enforces ownership check."""
         if not self.is_cloud_enabled:
             return False, "Cloud storage not available"
         try:
-            # 1. SECURITY CHECK: Verify the document belongs to this user
+            # Security check: verify ownership
             check = (
                 self.supabase.table("documents")
                 .select("id")
@@ -168,39 +144,24 @@ class CloudStorageService:
                 .execute()
             )
             if not check.data:
-                return (
-                    False,
-                    "Document not found or you do not have permission to delete it.",
-                )
+                return False, "Document not found or you do not have permission to delete it."
 
-            # 2. Delete metadata and content from Supabase
             self.supabase.table("documents").delete().eq("id", document_id).execute()
 
-            # 3. Delete vectors from Qdrant using the indexed payload field
             self.qdrant.delete(
                 collection_name=settings.QDRANT_COLLECTION,
                 points_selector=Filter(
-                    must=[
-                        FieldCondition(
-                            key="document_id", match=MatchValue(value=document_id)
-                        )
-                    ]
+                    must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
                 ),
             )
 
-            # 4. Log the deletion
             self.log_audit(username, "document_deleted", {"document_id": document_id})
             return True, "Document deleted successfully."
         except Exception as e:
             return False, f"Deletion failed: {str(e)}"
 
-    def store_vectors(
-        self,
-        embeddings: List[List[float]],
-        metadatas: List[Dict],
-        document_id: str,
-        uploaded_by: str,
-    ) -> bool:
+    def store_vectors(self, embeddings: List[List[float]], metadatas: List[Dict], 
+                     document_id: str, uploaded_by: str) -> bool:
         """Store vectors with multi-tenant isolation tag."""
         if not self.is_cloud_enabled:
             return False
@@ -212,62 +173,63 @@ class CloudStorageService:
                     PointStruct(
                         id=point_id,
                         vector=emb,
-                        # CRITICAL: Tag every vector with the uploader's username for isolation
-                        payload={
-                            **meta,
-                            "document_id": document_id,
-                            "uploaded_by": uploaded_by,
-                        },
+                        payload={**meta, "document_id": document_id, "uploaded_by": uploaded_by},
                     )
                 )
-            self.qdrant.upsert(
-                collection_name=settings.QDRANT_COLLECTION, points=points
-            )
+            self.qdrant.upsert(collection_name=settings.QDRANT_COLLECTION, points=points)
+            print(f"✅ Stored {len(points)} vectors in Qdrant for user '{uploaded_by}'")
             return True
         except Exception as e:
             print(f"⚠️ Vector storage failed: {e}")
             return False
 
-    def search_vectors(
-        self,
-        query_embedding: List[float],
-        k: int = 10,
-        uploaded_by: Optional[str] = None,
-    ) -> List[Dict]:
+    def search_vectors(self, query_embedding: List[float], k: int = 10, 
+                      uploaded_by: Optional[str] = None) -> List[Dict]:
         """Search vectors with strict multi-tenant isolation."""
         if not self.is_cloud_enabled:
             return []
 
+        print(f"🔍 Qdrant search: k={k}, uploaded_by='{uploaded_by}'")
+
+        # 🔥 CRITICAL: Build filter for multi-tenant isolation
         search_filter = None
         if uploaded_by:
-            # CRITICAL: Only return documents uploaded by this specific user
             search_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="uploaded_by", match=MatchValue(value=uploaded_by)
-                    )
-                ]
+                must=[FieldCondition(key="uploaded_by", match=MatchValue(value=uploaded_by))]
+            )
+            print(f"🔒 Applying filter: uploaded_by='{uploaded_by}'")
+
+        try:
+            results = self.qdrant.query_points(
+                collection_name=settings.QDRANT_COLLECTION,
+                query=query_embedding,
+                limit=k,
+                query_filter=search_filter,
+                with_payload=True,
             )
 
-        results = self.qdrant.query_points(
-            collection_name=settings.QDRANT_COLLECTION,
-            query=query_embedding,
-            limit=k,
-            query_filter=search_filter,
-            with_payload=True,
-        )
-
-        return [
-            {
-                "text": r.payload.get("text", ""),
-                "source": r.payload.get("source", "unknown"),
-                "category": r.payload.get("category", "general"),
-                "chunk_id": r.payload.get("chunk_id", str(r.id)),
-                "uploaded_by": r.payload.get("uploaded_by", "unknown"),
-                "score": r.score,
-            }
-            for r in results.points
-        ]
+            docs = [
+                {
+                    "text": r.payload.get("text", ""),
+                    "source": r.payload.get("source", "unknown"),
+                    "category": r.payload.get("category", "general"),
+                    "chunk_id": r.payload.get("chunk_id", str(r.id)),
+                    "uploaded_by": r.payload.get("uploaded_by", "unknown"),
+                    "score": r.score,
+                }
+                for r in results.points
+            ]
+            
+            print(f"✅ Qdrant returned {len(docs)} documents")
+            if docs:
+                print(f"   First doc: source='{docs[0].get('source')}', uploaded_by='{docs[0].get('uploaded_by')}'")
+            
+            return docs
+        except Exception as e:
+            print(f"❌ Qdrant search failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
 
     def log_audit(self, username: str, action: str, details: Dict) -> bool:
         if not self.is_cloud_enabled:

@@ -23,18 +23,14 @@ def get_user_documents(username):
             )
             docs = result.data
         except Exception as e:
-            print(f"⚠️ Supabase connection dropped while fetching documents: {e}")
-            print(
-                "💡 Tip: If using the free tier, your Supabase project may have gone to sleep. Try waking it up in the Supabase dashboard."
-            )
+            print(f"⚠️ Supabase error: {e}")
             docs = []
     else:
-        # Local fallback
         seen = set()
         docs = []
         for m in rag.metadata:
             fname = m.get("source", "unknown")
-            if fname not in seen:
+            if m.get("uploaded_by") == username and fname not in seen:
                 seen.add(fname)
                 docs.append(
                     {
@@ -54,12 +50,12 @@ def get_user_documents(username):
 
 
 def delete_selected_document(doc_id, username):
-    """Handle the deletion logic and refresh Dashboard + Dropdown."""
+    """Handle deletion and refresh ALL tabs."""
     if not doc_id or doc_id == "":
         return (
             "⚠️ Please select a document first.",
             gr.update(),
-            get_security_score_html(),
+            get_security_score_html(username),
         )
 
     filename = "unknown"
@@ -73,21 +69,24 @@ def delete_selected_document(doc_id, username):
             )
             if res.data:
                 filename = os.path.basename(res.data[0]["filename"])
+
             success, msg = cloud_storage.delete_document(doc_id, username)
+
+            # CRITICAL: Remove from local BM25 memory
+            if success:
+                rag.remove_document_from_memory(filename)
+                print(f"🗑️ Purged '{filename}' from local memory cache.")
+
         except Exception as e:
-            print(f"⚠️ Supabase error during deletion: {e}")
-            return (
-                f"❌ Database connection error: {e}",
-                gr.update(),
-                get_security_score_html(),
-            )
+            print(f"⚠️ Supabase error: {e}")
+            return f"❌ Database error: {e}", gr.update(), get_security_score_html(username)
     else:
         filename = doc_id
         success, msg = True, "Deleted locally"
         rag.remove_document_from_memory(filename)
 
-    # Generate the new dashboard score regardless of success/failure to keep UI in sync
-    new_dashboard_html = get_security_score_html()
+    # CRITICAL: Refresh ALL tabs
+    new_dashboard_html = get_security_score_html(username)
 
     if success:
         new_choices = get_user_documents(username)
@@ -121,15 +120,11 @@ def manage_documents_tab(user_state, dashboard_html):
         def refresh_list(username):
             return gr.update(choices=get_user_documents(username))
 
-        # FIX: Added dashboard_html to the outputs of the delete button!
+        # CRITICAL: Delete refreshes status + dropdown + dashboard
         delete_btn.click(
             delete_selected_document,
             inputs=[doc_dropdown, user_state],
-            outputs=[
-                status_box,
-                doc_dropdown,
-                dashboard_html,
-            ],
+            outputs=[status_box, doc_dropdown, dashboard_html],
         )
 
         refresh_btn.click(refresh_list, inputs=[user_state], outputs=[doc_dropdown])

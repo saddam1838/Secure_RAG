@@ -4,6 +4,9 @@ from services.security_scorer import SecurityScorer
 
 
 def get_security_score_html(username="admin"):
+    """Generate security score HTML for a specific user."""
+    print(f"📊 Generating dashboard for user: {username}")
+    
     score_data = SecurityScorer.calculate_posture_score(username)
     system_score = score_data["system_capability"]
     user_score = score_data["user_documents"]
@@ -92,6 +95,10 @@ def get_security_score_html(username="admin"):
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
             <h2 style="margin:0;color:#111827;">🛡️ Enterprise Security Overview</h2>
             <span style="background:{color};color:white;padding:6px 14px;border-radius:20px;font-weight:600;">{score_data["status"]}</span>
+        </div>
+        
+        <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:10px 14px;border-radius:6px;margin-bottom:16px;">
+            <strong style="color:#92400e;">👤 Viewing as:</strong> <span style="color:#78350f;font-weight:600;">{username}</span>
         </div>
 
         <!-- THREE Main Scores Side by Side -->
@@ -228,19 +235,28 @@ def get_compliance_html():
 def dashboard_tab(user_state):
     with gr.Tab("Security Dashboard"):
         gr.Markdown("### 🏢 Enterprise RAG Security Evaluation")
-        score_html = gr.HTML(value=get_security_score_html("admin"))
+        
+        # CRITICAL: Initialize with a placeholder, then update when user_state changes
+        score_html = gr.HTML(value="<p style='text-align:center;color:#6b7280;padding:20px;'>Loading dashboard...</p>")
+        
         refresh_btn = gr.Button("🔄 Recalculate Security Score", variant="primary")
+        
+        # CRITICAL: Update dashboard when refresh button is clicked
         refresh_btn.click(
-            lambda u: get_security_score_html(u),
+            fn=lambda u: get_security_score_html(u if u else "admin"),
             inputs=[user_state],
             outputs=score_html,
         )
+        
+        # CRITICAL: Update dashboard when user logs in/changes
         user_state.change(
-            lambda u: get_security_score_html(u),
+            fn=lambda u: get_security_score_html(u if u else "admin"),
             inputs=[user_state],
             outputs=score_html,
         )
+        
         gr.Markdown("---")
         gr.Markdown("### 📋 Compliance Framework Mappings")
         gr.HTML(value=get_compliance_html())
+    
     return score_html

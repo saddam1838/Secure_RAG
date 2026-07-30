@@ -16,17 +16,14 @@ def handle_login(username, password):
     if success:
         CURRENT_USER["username"] = username
         CURRENT_USER["role"] = role
-
-        # Step 1: Show the main app
-        # Step 2: Force the tabs to refresh (using hidden state)
         return (
             f"✅ Welcome, {username} ({role})",
-            gr.update(visible=True),  # main_app
-            gr.update(visible=False),  # login_btn
-            gr.update(visible=False),  # register_btn
-            gr.update(visible=True),  # logout_btn
-            username,  # user_state
-            gr.update(value=1),  # trigger tab refresh (hidden state)
+            gr.update(visible=True),
+            gr.update(visible=False),
+            gr.update(visible=False),
+            gr.update(visible=True),
+            username,
+            gr.update(value=1),
         )
     return (
         f"❌ {msg}",
@@ -34,7 +31,7 @@ def handle_login(username, password):
         gr.update(visible=True),
         gr.update(visible=True),
         gr.update(visible=False),
-        "",  # Changed from "admin" to empty string
+        "",
         gr.update(),
     )
 
@@ -42,40 +39,21 @@ def handle_login(username, password):
 def handle_register(username, password):
     success, msg = register_user(username, password)
     if success:
-        return (
-            f"✅ {msg} You can now log in.",
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-            gr.update(),
-        )
-    return (
-        f"❌ {msg}",
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-        gr.update(),
-    )
+        return f"✅ {msg} You can now log in."
+    return f"❌ {msg}"
 
 
 def logout():
     CURRENT_USER["username"] = None
     CURRENT_USER["role"] = None
-
-    # Step 1: Hide the main app
-    # Step 2: Clear the tab selection
     return (
         "Logged out",
-        gr.update(visible=False),  # main_app
-        gr.update(visible=True),  # login_btn
-        gr.update(visible=True),  # register_btn
-        gr.update(visible=False),  # logout_btn
-        "",  # Changed from "admin" to empty string
-        gr.update(value=0),  # reset tab refresh state
+        gr.update(visible=False),
+        gr.update(visible=True),
+        gr.update(visible=True),
+        gr.update(visible=False),
+        "",
+        gr.update(value=0),
     )
 
 
@@ -88,9 +66,7 @@ def create_gradio_app():
 
         with gr.Row():
             with gr.Column(scale=1, min_width=350):
-                username = gr.Textbox(
-                    label="Username", value=""
-                )  # Changed: removed "admin" default
+                username = gr.Textbox(label="Username", value="")
                 password = gr.Textbox(label="Password", type="password")
                 with gr.Row():
                     login_btn = gr.Button("Login", variant="primary")
@@ -99,61 +75,41 @@ def create_gradio_app():
                 logout_btn = gr.Button("Logout", variant="stop", visible=False)
 
         with gr.Column(visible=False) as main_app:
-            user_state = gr.State("")  # Changed from "admin" to empty string
-            tab_refresh = gr.State(0)  # Hidden state to trigger tab refresh
+            user_state = gr.State("")
+            tab_refresh = gr.State(0)
 
-            # Assign Tabs to a variable so we can update its 'selected' index
             with gr.Tabs() as main_tabs:
+                # These functions return the main HTML/Component that needs refreshing
                 score_html = dashboard_tab(user_state)
                 doc_dropdown = manage_documents_tab(user_state, score_html)
                 upload_tab(user_state, score_html, doc_dropdown)
                 chat_interface(user_state)
                 attack_simulator_tab()
                 security_tab()
-                evaluate_tab()
+                evaluate_tab(user_state)  # Auto-refreshes on user_state.change
 
-            # FIX: Forces the tab to reset to 0 (Security Dashboard) when tab_refresh changes.
-            # Using 'lambda _' safely accepts the state value to prevent TypeError.
             tab_refresh.change(
                 lambda _: gr.update(selected=0),
                 inputs=[tab_refresh],
                 outputs=[main_tabs],
             )
 
-        # Wire up events
         login_btn.click(
             handle_login,
             [username, password],
-            [
-                auth_status,
-                main_app,
-                login_btn,
-                register_btn,
-                logout_btn,
-                user_state,
-                tab_refresh,
-            ],
+            [auth_status, main_app, login_btn, register_btn, logout_btn, user_state, tab_refresh],
         )
 
         register_btn.click(
             handle_register,
             [username, password],
-            [auth_status, login_btn, register_btn, logout_btn, user_state, tab_refresh],
+            [auth_status],
         )
 
-        # COMBINED FIX: Resets server state AND forces browser reload to clear cache on logout
         logout_btn.click(
             logout,
             None,
-            [
-                auth_status,
-                main_app,
-                login_btn,
-                register_btn,
-                logout_btn,
-                user_state,
-                tab_refresh,
-            ],
+            [auth_status, main_app, login_btn, register_btn, logout_btn, user_state, tab_refresh],
             js="() => { setTimeout(() => window.location.reload(), 200); }",
         )
 

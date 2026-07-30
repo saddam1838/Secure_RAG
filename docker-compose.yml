@@ -10,7 +10,7 @@ services:
     build:
       context: .
       args:
-        - HF_TOKEN=${HF_TOKEN} # Passes token to Dockerfile ARG
+        - HF_TOKEN=${HF_TOKEN}
     ports:
       - "7860:7860"
       - "8000:8000"
@@ -28,9 +28,6 @@ services:
       - QDRANT_COLLECTION=${QDRANT_COLLECTION}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
-      - DEPLOYMENT_MODE=${DEPLOYMENT_MODE}
-      - GRADIO_SERVER_NAME=${GRADIO_SERVER_NAME}
-      - GRADIO_SERVER_PORT=${GRADIO_SERVER_PORT}
     depends_on:
       - redis
     restart: unless-stopped

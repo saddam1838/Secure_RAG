@@ -62,25 +62,25 @@ class RAGService:
                     if h not in self.global_chunk_hashes:
                         self.global_chunk_hashes.add(h)
                         self.corpus.append(chunk)
-                        self.metadata.append(
-                            {
-                                "text": chunk,
-                                "source": doc.get("filename", "unknown"),
-                                "chunk_id": h,
-                                "uploaded_by": uploader,
-                            }
-                        )
+                        self.metadata.append({
+                            "text": chunk,
+                            "source": doc.get("filename", "unknown"),
+                            "chunk_id": h,
+                            "uploaded_by": uploader,
+                        })
             except Exception as e:
-                print(f"️ Failed to process doc {doc.get('filename')}: {e}")
+                print(f"⚠️ Failed to process doc {doc.get('filename')}: {e}")
         if self.corpus:
             self.tokenized_corpus = [tokenize(doc) for doc in self.corpus]
             self.bm25 = BM25Okapi(self.tokenized_corpus)
         print(f"✅ Loaded {len(self.corpus)} chunks for BM25 search")
+        
+        users = set(m.get("uploaded_by") for m in self.metadata)
+        print(f"👥 Users with documents in memory: {users}")
 
     def remove_document_from_memory(self, source_filename: str):
         indices_to_remove = [
-            i
-            for i, meta in enumerate(self.metadata)
+            i for i, meta in enumerate(self.metadata)
             if meta.get("source") == source_filename
         ]
         if not indices_to_remove:
@@ -116,9 +116,9 @@ class RAGService:
         self.embedding_cache[cache_key] = emb
         return emb
 
-    def add_document(
-        self, content: str, metadata: Dict = None, uploaded_by: str = "admin"
-    ):
+    def add_document(self, content: str, metadata: Dict = None, uploaded_by: str = "admin"):
+        print(f"📥 add_document called with uploaded_by='{uploaded_by}'")
+        
         file_hash = hashlib.sha256(content.encode()).hexdigest()
         if self.use_cloud and cloud_storage.document_exists(file_hash):
             print(f"ℹ️ Document already exists: {file_hash[:8]}")
@@ -140,8 +140,7 @@ class RAGService:
 
         embeddings = self._get_embeddings(unique_chunks)
         base_meta = metadata or {"source": "unknown"}
-
-        # CRITICAL: Tag every chunk with the uploader's username for multi-tenant isolation
+        
         meta_list = [
             {
                 "text": chunk,
@@ -178,7 +177,6 @@ class RAGService:
                 return
             supabase_id = res.data[0]["id"]
 
-            # CRITICAL: Pass uploaded_by so vectors are tagged for isolation
             cloud_storage.store_vectors(
                 embeddings=embeddings.tolist(),
                 metadatas=meta_list,
@@ -194,56 +192,43 @@ class RAGService:
         self.corpus.extend(unique_chunks)
         self.tokenized_corpus = [tokenize(doc) for doc in self.corpus]
         self.bm25 = BM25Okapi(self.tokenized_corpus)
+        print(f"✅ Updated local BM25 index with {len(unique_chunks)} chunks (total: {len(self.corpus)})")
 
         if not self.use_cloud:
             self.processed_hashes.add(file_hash)
             self.save()
 
-    def retrieve(
-        self, query: str, filters: Dict = None, k: int = None, username: str = None
-    ) -> List[Dict]:
-        """
-        Retrieve documents with strict multi-tenant isolation.
-        If username is provided, ONLY documents uploaded by that user are returned.
-        """
+    def retrieve(self, query: str, filters: Dict = None, k: int = None, username: str = None) -> List[Dict]:
+        """Retrieve documents with strict multi-tenant isolation using Qdrant."""
         if k is None:
             k = settings.TOP_K_DENSE
+        
+        print(f"🔎 retrieve() called with username='{username}', corpus_size={len(self.corpus)}")
+        
+        # 🔥 CRITICAL: Validate username
+        if not username or username == "":
+            print(f"❌ BLOCKED: retrieve() called with empty username!")
+            return []
+        
         query_emb = self._get_embeddings([query])
-
+        
+        # 🔥 CRITICAL: Use cloud search with proper username filter
         if self.use_cloud:
-            # CRITICAL: Pass username to enforce tenant isolation in Qdrant
             dense_docs = cloud_storage.search_vectors(
                 query_embedding=query_emb[0].tolist(), k=k, uploaded_by=username
             )
+            print(f"🔍 Cloud search returned {len(dense_docs)} docs for user '{username}'")
         else:
             if self.vector_store is None or self.vector_store.index.ntotal == 0:
                 return []
             dense_results = self.vector_store.search(query_emb, k)
-            # CRITICAL: Filter local results by username
-            dense_docs = [
-                r["metadata"]
-                for r in dense_results
-                if not username or r["metadata"].get("uploaded_by") == username
-            ]
+            dense_docs = [r["metadata"] for r in dense_results if r["metadata"].get("uploaded_by") == username]
 
-        bm25_docs = []
-        if self.bm25:
-            tokenized_query = tokenize(query)
-            scores = self.bm25.get_scores(tokenized_query)
-            top_indices = np.argsort(scores)[-settings.TOP_K_BM25 :][::-1]
-            for idx in top_indices:
-                if idx < len(self.metadata):
-                    meta = self.metadata[idx]
-                    # CRITICAL: Filter BM25 results by username
-                    if not username or meta.get("uploaded_by") == username:
-                        bm25_docs.append(meta)
-
-        fused = self._reciprocal_rank_fusion(dense_docs, bm25_docs)
         if filters:
-            fused = [
-                d for d in fused if all(d.get(fk) == fv for fk, fv in filters.items())
-            ]
-        return fused[:k]
+            dense_docs = [d for d in dense_docs if all(d.get(fk) == fv for fk, fv in filters.items())]
+        
+        print(f"✅ Final retrieval: {len(dense_docs[:k])} documents for user '{username}'")
+        return dense_docs[:k]
 
     def _reciprocal_rank_fusion(self, list1, list2, k=40):
         scores = {}
@@ -269,13 +254,8 @@ class RAGService:
         if not context:
             return "No relevant documents found in your knowledge base. Please upload documents to get started."
 
-        context_text = "\n\n".join(
-            [f"Document {i + 1}:\n{c['text']}" for i, c in enumerate(context)]
-        )
-
-        citations = [
-            f"[{i}] {os.path.basename(c['source'])}" for i, c in enumerate(context, 1)
-        ]
+        context_text = "\n\n".join([f"Document {i + 1}:\n{c['text']}" for i, c in enumerate(context)])
+        citations = [f"[{i}] {os.path.basename(c['source'])}" for i, c in enumerate(context, 1)]
         source_str = " | ".join(citations)
 
         prompt = f"""You are a helpful AI assistant. Answer the user's question based ONLY on the provided context. 
@@ -301,22 +281,14 @@ Answer:"""
             tokenizer = self.generator["tokenizer"]
             model = self.generator["model"]
             device = self.generator["device"]
-            inputs = tokenizer(
-                prompt, return_tensors="pt", truncation=True, max_length=1024
-            ).to(device)
+            inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024).to(device)
             with torch.no_grad():
                 outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=300,
-                    temperature=0.2,
-                    do_sample=True,
-                    repetition_penalty=1.2,
-                    no_repeat_ngram_size=3,
+                    **inputs, max_new_tokens=300, temperature=0.2, do_sample=True,
+                    repetition_penalty=1.2, no_repeat_ngram_size=3,
                     pad_token_id=tokenizer.eos_token_id,
                 )
-            generated_text = tokenizer.decode(
-                outputs[0], skip_special_tokens=True
-            ).strip()
+            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
             if generated_text.lower().startswith("answer:"):
                 generated_text = generated_text[7:].strip()
             return f"{generated_text}\n\n---\nSources: {source_str}"
@@ -324,75 +296,6 @@ Answer:"""
             print("⚠️ GENERATION ERROR:")
             traceback.print_exc()
             return f"Generation unavailable: {str(e)}\n\n---\nSources: {source_str}"
-
-    def generate_stream(self, query: str, context: List[Dict]):
-        if not context:
-            yield "No relevant documents found in your knowledge base. Please upload documents to get started."
-            return
-
-        context_text = "\n\n".join(
-            [f"Document {i + 1}:\n{c['text']}" for i, c in enumerate(context)]
-        )
-        citations = [
-            f"[{i}] {os.path.basename(c['source'])}" for i, c in enumerate(context, 1)
-        ]
-        source_str = " | ".join(citations)
-
-        prompt = f"""You are a helpful AI assistant. Answer the user's question based ONLY on the provided context. 
-Write a clear, complete, and coherent explanation.
-
-Question: {query}
-
-Context:
-{context_text}
-
-Answer:"""
-
-        if count_tokens(prompt) > 1500:
-            context_text = truncate_text(context_text, 1200)
-            prompt = f"""You are a helpful AI assistant. Answer the user's question based ONLY on the provided context. 
-Write a clear, complete summary.
-
-Question: {query}
-Context: {context_text}
-Answer:"""
-
-        try:
-            tokenizer = self.generator["tokenizer"]
-            model = self.generator["model"]
-            device = self.generator["device"]
-            inputs = tokenizer(
-                prompt, return_tensors="pt", truncation=True, max_length=1024
-            ).to(device)
-            with torch.no_grad():
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=300,
-                    temperature=0.2,
-                    do_sample=True,
-                    repetition_penalty=1.2,
-                    no_repeat_ngram_size=3,
-                    pad_token_id=tokenizer.eos_token_id,
-                )
-            generated_text = tokenizer.decode(
-                outputs[0], skip_special_tokens=True
-            ).strip()
-            if generated_text.lower().startswith("answer:"):
-                generated_text = generated_text[7:].strip()
-            words = generated_text.split(" ")
-            buffer = ""
-            for word in words:
-                buffer += word + " "
-                if len(buffer) > 15 or word.endswith((".", "!", "?", "\n")):
-                    yield buffer
-                    buffer = ""
-            if buffer:
-                yield buffer
-            yield f"\n\n---\nSources: {source_str}"
-        except Exception as e:
-            print("⚠️ GENERATION ERROR (stream):")
-            traceback.print_exc()
-            yield f"Generation unavailable: {str(e)}\n\n---\nSources: {source_str}"
 
     def save(self):
         if self.use_cloud:
