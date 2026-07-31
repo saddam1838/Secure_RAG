@@ -1,14 +1,12 @@
-myenv/
-venv/
-.venv/
-env/
-ENV/
+# Environment & Secrets
 .env
 .env.local
 .env.*
 *.pem
 *.key
 *.cert
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -20,12 +18,25 @@ __pycache__/
 dist/
 build/
 .eggs/
+myenv/
+venv/
+.venv/
+env/
+ENV/
+
+# Database
 *.db
 *.sqlite
 *.sqlite3
 data/*.db
+
+# Logs & Reports
 logs/
 *.log
+audit_report.txt
+reports/
+
+# Models & Cache
 *.bin
 *.pt
 *.pth
@@ -36,8 +47,8 @@ logs/
 models_cache/
 hf_cache/
 torch_hub/
-audit_report.txt
-reports/
+
+# IDE
 .vscode/
 .idea/
 *.swp
@@ -46,12 +57,16 @@ reports/
 .project
 .classpath
 .settings/
+
+# OS
 .DS_Store
 .DS_Store?
 ._*
 Thumbs.db
 ehthumbs.db
 desktop.ini
+
+# Testing
 .pytest_cache/
 .coverage
 .coverage.*
@@ -59,9 +74,13 @@ htmlcov/
 .mypy_cache/
 .tox/
 .ipynb_checkpoints/
+
+# Uploads
 uploads/
 uploaded_files/
 temp_uploads/
+
+# Vector Index (regenerated on startup)
 *.faiss
 *.pkl
 *.pickle
@@ -69,9 +88,21 @@ temp_uploads/
 index_dir/
 faiss_index/
 qdrant_storage/
+index/
+
+# Docker
 .docker/
+
+# Temp files
 *.tmp
 *.temp
 *~
 audit_files.py
 simple_tree.py
+
+# Node modules (React dependencies - too large for GitHub)
+node_modules/
+ui-react/node_modules/
+
+# Keep the built React app (it's small and needed for deployment)
+# !ui-react/dist/
