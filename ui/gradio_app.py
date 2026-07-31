@@ -59,7 +59,7 @@ def logout():
 
 
 def create_gradio_app():
-    with gr.Blocks(title="🔐 SecureRAG") as demo:
+    with gr.Blocks(head='<script src="https://cdn.jsdelivr.net/npm/urlpattern-polyfill@1.0.14/dist/urlpattern-polyfill.min.js"></script>', title="🔐 SecureRAG") as demo:
         gr.Markdown("# 🔐 SecureRAG")
         gr.Markdown("### Hybrid RAG • OWASP/MITRE/NIST Compliant • Defense-in-Depth Security")
 
