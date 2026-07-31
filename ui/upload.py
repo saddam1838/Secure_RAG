@@ -52,12 +52,8 @@ def scan_file_for_security(file):
 
 
 def index_approved_document(username):
-    """Index document with strict username validation."""
-    # 🔥 CRITICAL: Validate username - NEVER allow empty/None
     if not username or username == "" or username is None:
-        error_msg = "❌ **ERROR:** You are not logged in. Please log out and log back in to upload documents."
-        print(f"❌ BLOCKED: Upload attempted with invalid username: '{username}'")
-        return error_msg, gr.update(), gr.update()
+        return "❌ **ERROR:** You are not logged in. Please log out and log back in.", gr.update(), gr.update()
 
     if not last_scan_result["is_safe"] or not last_scan_result["content"]:
         return "❌ Cannot index: Document has not passed security scan.", gr.update(), gr.update()
@@ -68,29 +64,26 @@ def index_approved_document(username):
             "size_mb": last_scan_result["size_mb"],
         }
 
-        print(f"📤 INDEXING: filename='{last_scan_result['filename']}', uploaded_by='{username}'")
+        print(f"📤 INDEXING: filename='{last_scan_result['filename']}', user='{username}'")
         
-        # 🔥 CRITICAL: Pass username to RAG service
         rag.add_document(last_scan_result["content"], metadata, uploaded_by=username)
-
         audit.log(username, "document_indexed", {"filename": last_scan_result["filename"]})
 
         filename = last_scan_result["filename"]
 
-        # Clear scan result
         last_scan_result["content"] = None
         last_scan_result["filename"] = None
         last_scan_result["is_safe"] = False
         last_scan_result["size_mb"] = 0.0
 
-        print(f"✅ Document indexed by '{username}': {filename}")
-
-        # Refresh dashboard and document list
+        # 🔥 Refresh dashboard and document list instantly (no cache invalidation hangs)
         from ui.dashboard import get_security_score_html
         from ui.manage_documents import get_user_documents
 
         new_dashboard = get_security_score_html(username)
         new_choices = get_user_documents(username)
+
+        print(f"✅ Upload complete and UI refreshed for user '{username}'")
 
         return (
             f"✅ Successfully indexed: {filename} (as user: {username})",
@@ -111,7 +104,6 @@ def upload_tab(user_state, dashboard_html, doc_dropdown):
             "All documents are scanned for prompt injections, hidden payloads, base64 obfuscation, and PII before indexing. Only verified-clean documents enter the vector database."
         )
 
-        # 🔥 Show current user for debugging
         user_display = gr.Markdown("")
 
         with gr.Row():
@@ -131,14 +123,12 @@ def upload_tab(user_state, dashboard_html, doc_dropdown):
 
         scan_btn.click(scan_file_for_security, [file_input], [scan_output, index_btn])
 
-        # 🔥 CRITICAL: Pass user_state to index function
         index_btn.click(
             index_approved_document,
             inputs=[user_state],
             outputs=[index_output, dashboard_html, doc_dropdown],
         )
 
-        # 🔥 Update user display when user_state changes
         def update_user_display(username):
             if username and username != "":
                 return f"**👤 Logged in as:** `{username}`"

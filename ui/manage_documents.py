@@ -8,7 +8,6 @@ rag = RAGService()
 
 
 def get_user_documents(username):
-    """Fetch documents for the dropdown with robust error handling."""
     if not username:
         return []
 
@@ -32,14 +31,7 @@ def get_user_documents(username):
             fname = m.get("source", "unknown")
             if m.get("uploaded_by") == username and fname not in seen:
                 seen.add(fname)
-                docs.append(
-                    {
-                        "id": "local",
-                        "filename": fname,
-                        "size_mb": 0,
-                        "created_at": "Local",
-                    }
-                )
+                docs.append({"id": "local", "filename": fname, "size_mb": 0, "created_at": "Local"})
 
     choices = []
     for d in docs:
@@ -50,13 +42,8 @@ def get_user_documents(username):
 
 
 def delete_selected_document(doc_id, username):
-    """Handle deletion and refresh ALL tabs."""
     if not doc_id or doc_id == "":
-        return (
-            "⚠️ Please select a document first.",
-            gr.update(),
-            get_security_score_html(username),
-        )
+        return "⚠️ Please select a document first.", gr.update(), get_security_score_html(username)
 
     filename = "unknown"
     if cloud_storage.is_cloud_enabled:
@@ -72,10 +59,9 @@ def delete_selected_document(doc_id, username):
 
             success, msg = cloud_storage.delete_document(doc_id, username)
 
-            # CRITICAL: Remove from local BM25 memory
             if success:
                 rag.remove_document_from_memory(filename)
-                print(f"🗑️ Purged '{filename}' from local memory cache.")
+                print(f"🗑️ Purged '{filename}' from memory.")
 
         except Exception as e:
             print(f"⚠️ Supabase error: {e}")
@@ -85,7 +71,7 @@ def delete_selected_document(doc_id, username):
         success, msg = True, "Deleted locally"
         rag.remove_document_from_memory(filename)
 
-    # CRITICAL: Refresh ALL tabs
+    # 🔥 Refresh dashboard with fresh data
     new_dashboard_html = get_security_score_html(username)
 
     if success:
@@ -102,15 +88,11 @@ def delete_selected_document(doc_id, username):
 def manage_documents_tab(user_state, dashboard_html):
     with gr.Tab("Manage Documents"):
         gr.Markdown("### 🗂️ Indexed Documents")
-        gr.Markdown(
-            "Select a document to delete. You can only remove documents you uploaded."
-        )
+        gr.Markdown("Select a document to delete. You can only remove documents you uploaded.")
 
         with gr.Row():
             with gr.Column(scale=2):
-                doc_dropdown = gr.Dropdown(
-                    label="Select Document to Delete", choices=[], interactive=True
-                )
+                doc_dropdown = gr.Dropdown(label="Select Document to Delete", choices=[], interactive=True)
             with gr.Column(scale=1):
                 delete_btn = gr.Button("🗑️ Delete Selected", variant="stop")
                 refresh_btn = gr.Button("🔄 Refresh List", variant="secondary")
@@ -120,7 +102,7 @@ def manage_documents_tab(user_state, dashboard_html):
         def refresh_list(username):
             return gr.update(choices=get_user_documents(username))
 
-        # CRITICAL: Delete refreshes status + dropdown + dashboard
+        # 🔥 Updates: status, doc_dropdown, dashboard
         delete_btn.click(
             delete_selected_document,
             inputs=[doc_dropdown, user_state],

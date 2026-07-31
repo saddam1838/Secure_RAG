@@ -16,6 +16,7 @@ def handle_login(username, password):
     if success:
         CURRENT_USER["username"] = username
         CURRENT_USER["role"] = role
+        print(f"✅ LOGIN: '{username}'")
         return (
             f"✅ Welcome, {username} ({role})",
             gr.update(visible=True),
@@ -60,9 +61,7 @@ def logout():
 def create_gradio_app():
     with gr.Blocks(title="🔐 SecureRAG") as demo:
         gr.Markdown("# 🔐 SecureRAG")
-        gr.Markdown(
-            "### Hybrid RAG • OWASP/MITRE/NIST Compliant • Defense-in-Depth Security"
-        )
+        gr.Markdown("### Hybrid RAG • OWASP/MITRE/NIST Compliant • Defense-in-Depth Security")
 
         with gr.Row():
             with gr.Column(scale=1, min_width=350):
@@ -79,14 +78,14 @@ def create_gradio_app():
             tab_refresh = gr.State(0)
 
             with gr.Tabs() as main_tabs:
-                # These functions return the main HTML/Component that needs refreshing
+                # 🔥 CRITICAL: Capture returned components for cross-tab refresh
                 score_html = dashboard_tab(user_state)
                 doc_dropdown = manage_documents_tab(user_state, score_html)
                 upload_tab(user_state, score_html, doc_dropdown)
                 chat_interface(user_state)
                 attack_simulator_tab()
                 security_tab()
-                evaluate_tab(user_state)  # Auto-refreshes on user_state.change
+                evaluate_tab(user_state)
 
             tab_refresh.change(
                 lambda _: gr.update(selected=0),

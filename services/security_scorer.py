@@ -3,8 +3,7 @@ import time
 from config import settings
 from services.cloud_storage import cloud_storage
 
-# EXTENDED CACHE: 24 hours (86400 seconds) so it stays warm even if you step away
-_CACHE_DURATION = 86400 
+_CACHE_DURATION = 86400  # 24 hours
 
 _benchmark_cache = {"data": None, "timestamp": 0, "cache_duration": _CACHE_DURATION}
 _rag_cache = {"data": None, "timestamp": 0, "cache_duration": _CACHE_DURATION}
@@ -27,12 +26,15 @@ def _get_cached_benchmark():
 
 
 def _get_cached_rag_quality():
+    """System-wide RAG quality evaluation - no user filter."""
     current_time = time.time()
     if _rag_cache["data"] is not None and (current_time - _rag_cache["timestamp"]) < _CACHE_DURATION:
         return _rag_cache["data"]
     try:
         from services.rag_service import RAGService
         rag = RAGService()
+        
+        # Skip expensive evaluation if no documents
         if len(rag.corpus) == 0:
             result = {"has_documents": False, "overall_score": 0, "status": "No Documents", "color": "#6b7280", "emoji": "⚪", "metrics": {}}
             _rag_cache["data"] = result
@@ -42,13 +44,14 @@ def _get_cached_rag_quality():
         from services.llm_evaluator import LLMJudgeEvaluator
         print("🔄 Refreshing RAG quality cache...")
         evaluator = LLMJudgeEvaluator()
-        results = evaluator.run_dynamic_evaluation(rag, num_queries=3, k=3)
+        # 🔥 FIX: Don't pass username parameter - evaluator doesn't accept it
+        results = evaluator.run_dynamic_evaluation(rag, num_queries=2, k=3)
         
         if not results.get("has_documents"):
             result = {"has_documents": False, "overall_score": 0, "status": "No Documents", "color": "#6b7280", "emoji": "⚪", "metrics": {}}
         else:
             avg = results["average_metrics"]
-            overall = (avg["precision@k"] * 0.3 + avg["mrr"] * 0.3 + avg["ndcg@k"] * 0.3 + (avg["avg_relevance"] / 3) * 0.1) * 100
+            overall = (avg.get("precision@k", 0) * 0.3 + avg.get("mrr", 0) * 0.3 + avg.get("ndcg@k", 0) * 0.3 + (avg.get("avg_relevance", 0) / 3) * 0.1) * 100
             status, color, emoji = ("Excellent", "#10b981", "🟢") if overall >= 75 else ("Good", "#f59e0b", "🟡") if overall >= 55 else ("Fair", "#f97316", "🟠") if overall >= 35 else ("Needs Improvement", "#ef4444", "🔴")
             result = {"has_documents": True, "overall_score": round(overall, 1), "status": status, "color": color, "emoji": emoji, "metrics": avg}
             
@@ -118,6 +121,7 @@ class SecurityScorer:
 
     @staticmethod
     def calculate_user_documents_score(username: str = "admin") -> dict:
+        """User-specific - NOT cached, always fresh from Supabase."""
         total_scans = safe_scans = total_chunks = 0
         unsafe_documents = []
 

@@ -42,7 +42,7 @@ class RAGService:
         self.tokenized_corpus: List[List[str]] = []
         self.bm25: Optional[BM25Okapi] = None
         self.processed_hashes = set()
-        self.global_chunk_hashes = set()
+        self.chunk_hashes = set()
         self.embedding_cache = {}
 
         if self.use_cloud:
@@ -59,13 +59,14 @@ class RAGService:
                 uploader = doc.get("uploaded_by", "unknown")
                 for chunk in chunks:
                     h = hashlib.md5(chunk.encode()).hexdigest()
-                    if h not in self.global_chunk_hashes:
-                        self.global_chunk_hashes.add(h)
+                    key = (h, uploader)
+                    if key not in self.chunk_hashes:
+                        self.chunk_hashes.add(key)
                         self.corpus.append(chunk)
                         self.metadata.append({
                             "text": chunk,
                             "source": doc.get("filename", "unknown"),
-                            "chunk_id": h,
+                            "chunk_id": f"{uploader}-{h}",
                             "uploaded_by": uploader,
                         })
             except Exception as e:
@@ -74,9 +75,6 @@ class RAGService:
             self.tokenized_corpus = [tokenize(doc) for doc in self.corpus]
             self.bm25 = BM25Okapi(self.tokenized_corpus)
         print(f"✅ Loaded {len(self.corpus)} chunks for BM25 search")
-        
-        users = set(m.get("uploaded_by") for m in self.metadata)
-        print(f"👥 Users with documents in memory: {users}")
 
     def remove_document_from_memory(self, source_filename: str):
         indices_to_remove = [
@@ -86,6 +84,10 @@ class RAGService:
         if not indices_to_remove:
             return False
         for i in sorted(indices_to_remove, reverse=True):
+            chunk = self.corpus[i]
+            h = hashlib.md5(chunk.encode()).hexdigest()
+            user = self.metadata[i].get("uploaded_by", "unknown")
+            self.chunk_hashes.discard((h, user))
             del self.corpus[i]
             del self.metadata[i]
             del self.tokenized_corpus[i]
@@ -117,36 +119,41 @@ class RAGService:
         return emb
 
     def add_document(self, content: str, metadata: Dict = None, uploaded_by: str = "admin"):
-        print(f"📥 add_document called with uploaded_by='{uploaded_by}'")
+        # 🔥 CRITICAL FIX: Separate global content hash from user-specific DB hash
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
         
-        file_hash = hashlib.sha256(content.encode()).hexdigest()
-        if self.use_cloud and cloud_storage.document_exists(file_hash):
-            print(f"ℹ️ Document already exists: {file_hash[:8]}")
+        exists = cloud_storage.document_exists_for_user(content_hash, uploaded_by)
+        if self.use_cloud and exists:
+            print(f"ℹ️ Document already exists for user '{uploaded_by}'")
             return
-        if not self.use_cloud and file_hash in self.processed_hashes:
+        if not self.use_cloud and content_hash in self.processed_hashes:
             return
 
         chunks = self._chunk_document(content)
         if not chunks:
             return
+
         unique_chunks = []
         for chunk in chunks:
             h = hashlib.md5(chunk.encode()).hexdigest()
-            if h not in self.global_chunk_hashes:
-                self.global_chunk_hashes.add(h)
+            key = (h, uploaded_by)
+            if key not in self.chunk_hashes:
+                self.chunk_hashes.add(key)
                 unique_chunks.append(chunk)
+        
         if not unique_chunks:
+            print(f"⚠️ All chunks already exist for user '{uploaded_by}'")
             return
 
         embeddings = self._get_embeddings(unique_chunks)
         base_meta = metadata or {"source": "unknown"}
-        
+
         meta_list = [
             {
                 "text": chunk,
                 "source": base_meta.get("source", "unknown"),
                 "category": base_meta.get("category", "general"),
-                "chunk_id": hashlib.md5(chunk.encode()).hexdigest(),
+                "chunk_id": f"{uploaded_by}-{hashlib.md5(chunk.encode()).hexdigest()}",
                 "uploaded_by": uploaded_by,
             }
             for chunk in unique_chunks
@@ -155,7 +162,7 @@ class RAGService:
         if self.use_cloud:
             success, msg = cloud_storage.save_document(
                 filename=base_meta.get("source", "unknown"),
-                file_hash=file_hash,
+                content_hash=content_hash,
                 content=content,
                 size_mb=len(content.encode("utf-8")) / (1024 * 1024),
                 uploaded_by=uploaded_by,
@@ -166,10 +173,13 @@ class RAGService:
                 print(f"❌ Failed to save to Supabase: {msg}")
                 return
 
+            user_specific_hash = f"{uploaded_by}_{content_hash}"
             res = (
                 cloud_storage.supabase.table("documents")
                 .select("id")
-                .eq("file_hash", file_hash)
+                .eq("file_hash", user_specific_hash)
+                .order("created_at", desc=True)
+                .limit(1)
                 .execute()
             )
             if not res.data:
@@ -183,6 +193,7 @@ class RAGService:
                 document_id=supabase_id,
                 uploaded_by=uploaded_by,
             )
+            print(f"✅ Successfully saved and vectorized document for user '{uploaded_by}'")
         else:
             if self.vector_store is None:
                 self.vector_store = FAISSStore(dim=embeddings.shape[1])
@@ -192,55 +203,35 @@ class RAGService:
         self.corpus.extend(unique_chunks)
         self.tokenized_corpus = [tokenize(doc) for doc in self.corpus]
         self.bm25 = BM25Okapi(self.tokenized_corpus)
-        print(f"✅ Updated local BM25 index with {len(unique_chunks)} chunks (total: {len(self.corpus)})")
 
         if not self.use_cloud:
-            self.processed_hashes.add(file_hash)
+            self.processed_hashes.add(content_hash)
             self.save()
 
     def retrieve(self, query: str, filters: Dict = None, k: int = None, username: str = None) -> List[Dict]:
-        """Retrieve documents with strict multi-tenant isolation using Qdrant."""
         if k is None:
             k = settings.TOP_K_DENSE
-        
-        print(f"🔎 retrieve() called with username='{username}', corpus_size={len(self.corpus)}")
-        
-        # 🔥 CRITICAL: Validate username
-        if not username or username == "":
-            print(f"❌ BLOCKED: retrieve() called with empty username!")
+
+        try:
+            query_emb = self._get_embeddings([query])
+            if self.use_cloud:
+                # 🔥 FIX: Allows username=None for dashboard warm-up without crashing
+                dense_docs = cloud_storage.search_vectors(query_embedding=query_emb[0].tolist(), k=k, uploaded_by=username)
+            else:
+                if self.vector_store is None or self.vector_store.index.ntotal == 0:
+                    return []
+                dense_results = self.vector_store.search(query_emb, k)
+                if username:
+                    dense_docs = [r["metadata"] for r in dense_results if r["metadata"].get("uploaded_by") == username]
+                else:
+                    dense_docs = [r["metadata"] for r in dense_results]
+
+            if filters:
+                dense_docs = [d for d in dense_docs if all(d.get(fk) == fv for fk, fv in filters.items())]
+            return dense_docs[:k]
+        except Exception as e:
+            print(f"❌ retrieve() failed: {e}")
             return []
-        
-        query_emb = self._get_embeddings([query])
-        
-        # 🔥 CRITICAL: Use cloud search with proper username filter
-        if self.use_cloud:
-            dense_docs = cloud_storage.search_vectors(
-                query_embedding=query_emb[0].tolist(), k=k, uploaded_by=username
-            )
-            print(f"🔍 Cloud search returned {len(dense_docs)} docs for user '{username}'")
-        else:
-            if self.vector_store is None or self.vector_store.index.ntotal == 0:
-                return []
-            dense_results = self.vector_store.search(query_emb, k)
-            dense_docs = [r["metadata"] for r in dense_results if r["metadata"].get("uploaded_by") == username]
-
-        if filters:
-            dense_docs = [d for d in dense_docs if all(d.get(fk) == fv for fk, fv in filters.items())]
-        
-        print(f"✅ Final retrieval: {len(dense_docs[:k])} documents for user '{username}'")
-        return dense_docs[:k]
-
-    def _reciprocal_rank_fusion(self, list1, list2, k=40):
-        scores = {}
-        for rank, doc in enumerate(list1, start=1):
-            doc_id = doc.get("chunk_id", str(rank))
-            scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (k + rank)
-        for rank, doc in enumerate(list2, start=1):
-            doc_id = doc.get("chunk_id", str(rank))
-            scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (k + rank)
-        sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
-        id_to_doc = {d.get("chunk_id", str(i)): d for i, d in enumerate(list1 + list2)}
-        return [id_to_doc[doc_id] for doc_id in sorted_ids if doc_id in id_to_doc]
 
     def rerank(self, query: str, documents: List[Dict]) -> List[Dict]:
         if not documents:
@@ -253,53 +244,25 @@ class RAGService:
     def generate(self, query: str, context: List[Dict]) -> str:
         if not context:
             return "No relevant documents found in your knowledge base. Please upload documents to get started."
-
         context_text = "\n\n".join([f"Document {i + 1}:\n{c['text']}" for i, c in enumerate(context)])
         citations = [f"[{i}] {os.path.basename(c['source'])}" for i, c in enumerate(context, 1)]
-        source_str = " | ".join(citations)
-
-        prompt = f"""You are a helpful AI assistant. Answer the user's question based ONLY on the provided context. 
-Write a clear, complete, and coherent explanation. Do not output partial sentences.
-
-Question: {query}
-
-Context:
-{context_text}
-
-Answer:"""
-
-        if count_tokens(prompt) > 1500:
-            context_text = truncate_text(context_text, 1200)
-            prompt = f"""You are a helpful AI assistant. Answer the user's question based ONLY on the provided context. 
-Write a clear, complete summary.
-
-Question: {query}
-Context: {context_text}
-Answer:"""
-
+        
+        prompt = f"Answer based ONLY on the provided context.\n\nQuestion: {query}\nContext:\n{context_text}\nAnswer:"
+        
         try:
             tokenizer = self.generator["tokenizer"]
             model = self.generator["model"]
             device = self.generator["device"]
             inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024).to(device)
             with torch.no_grad():
-                outputs = model.generate(
-                    **inputs, max_new_tokens=300, temperature=0.2, do_sample=True,
-                    repetition_penalty=1.2, no_repeat_ngram_size=3,
-                    pad_token_id=tokenizer.eos_token_id,
-                )
+                outputs = model.generate(**inputs, max_new_tokens=300, temperature=0.2, do_sample=True, pad_token_id=tokenizer.eos_token_id)
             generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
-            if generated_text.lower().startswith("answer:"):
-                generated_text = generated_text[7:].strip()
-            return f"{generated_text}\n\n---\nSources: {source_str}"
+            return f"{generated_text}\n\n---\nSources: {' | '.join(citations)}"
         except Exception as e:
-            print("⚠️ GENERATION ERROR:")
-            traceback.print_exc()
-            return f"Generation unavailable: {str(e)}\n\n---\nSources: {source_str}"
+            return f"Generation unavailable: {str(e)}"
 
     def save(self):
-        if self.use_cloud:
-            return
+        if self.use_cloud: return
         index_dir = settings.INDEX_DIR
         index_dir.mkdir(parents=True, exist_ok=True)
         if self.vector_store and hasattr(self.vector_store, "index"):
@@ -310,15 +273,11 @@ Answer:"""
             pickle.dump(self.corpus, f)
         with open(index_dir / "processed_hashes.pkl", "wb") as f:
             pickle.dump(self.processed_hashes, f)
-        with open(index_dir / "global_chunk_hashes.pkl", "wb") as f:
-            pickle.dump(self.global_chunk_hashes, f)
 
     def load(self):
-        if self.use_cloud:
-            return
+        if self.use_cloud: return
         index_dir = settings.INDEX_DIR
-        if not index_dir.exists():
-            return
+        if not index_dir.exists(): return
         if (index_dir / "index.faiss").exists():
             self.vector_store = FAISSStore(dim=384)
             self.vector_store.index = faiss.read_index(str(index_dir / "index.faiss"))
@@ -333,6 +292,3 @@ Answer:"""
             if (index_dir / "processed_hashes.pkl").exists():
                 with open(index_dir / "processed_hashes.pkl", "rb") as f:
                     self.processed_hashes = pickle.load(f)
-            if (index_dir / "global_chunk_hashes.pkl").exists():
-                with open(index_dir / "global_chunk_hashes.pkl", "rb") as f:
-                    self.global_chunk_hashes = pickle.load(f)

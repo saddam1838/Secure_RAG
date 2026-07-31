@@ -5,7 +5,10 @@ from services.security_scorer import SecurityScorer
 
 def get_security_score_html(username="admin"):
     """Generate security score HTML for a specific user."""
-    print(f"📊 Generating dashboard for user: {username}")
+    if not username or username == "":
+        username = "admin"
+    
+    print(f"📊 Generating dashboard for user: '{username}'")
     
     score_data = SecurityScorer.calculate_posture_score(username)
     system_score = score_data["system_capability"]
@@ -17,15 +20,7 @@ def get_security_score_html(username="admin"):
     # System breakdown rows
     system_rows = ""
     for metric, value in system_score["breakdown"].items():
-        bar_color = (
-            "#10b981"
-            if value >= 90
-            else "#f59e0b"
-            if value >= 75
-            else "#f97316"
-            if value >= 50
-            else "#ef4444"
-        )
+        bar_color = "#10b981" if value >= 90 else "#f59e0b" if value >= 75 else "#f97316" if value >= 50 else "#ef4444"
         system_rows += f'<tr><td style="padding:4px 0;font-size:11px;">{metric}</td><td style="padding:4px 0;"><div style="background:#e5e7eb;border-radius:4px;overflow:hidden;width:100%;"><div style="background:{bar_color};width:{value}%;height:10px;"></div></div></td><td style="padding:4px 0 4px 6px;text-align:right;font-size:11px;">{value:.0f}%</td></tr>'
 
     # RAG metrics
@@ -44,31 +39,14 @@ def get_security_score_html(username="admin"):
     # Query Attack detection rate
     query_attacks_tested = stats.get("attacks_tested", 0)
     query_attacks_blocked = stats.get("attacks_blocked", 0)
-    query_detection_rate = round(
-        (query_attacks_blocked / query_attacks_tested * 100)
-        if query_attacks_tested > 0
-        else 0,
-        1,
-    )
-    query_color = (
-        "#10b981"
-        if query_detection_rate >= 90
-        else "#f59e0b"
-        if query_detection_rate >= 75
-        else "#ef4444"
-    )
+    query_detection_rate = round((query_attacks_blocked / query_attacks_tested * 100) if query_attacks_tested > 0 else 0, 1)
+    query_color = "#10b981" if query_detection_rate >= 90 else "#f59e0b" if query_detection_rate >= 75 else "#ef4444"
 
     # Document Scanner detection rate
     doc_attacks_tested = stats.get("doc_attacks_tested", 0)
     doc_attacks_blocked = stats.get("doc_attacks_blocked", 0)
     doc_detection_rate = system_score["breakdown"].get("Document Scanner", 0)
-    doc_color = (
-        "#10b981"
-        if doc_detection_rate >= 90
-        else "#f59e0b"
-        if doc_detection_rate >= 75
-        else "#ef4444"
-    )
+    doc_color = "#10b981" if doc_detection_rate >= 90 else "#f59e0b" if doc_detection_rate >= 75 else "#ef4444"
 
     # Attack rows
     attack_rows = ""
@@ -82,13 +60,7 @@ def get_security_score_html(username="admin"):
         attack_rows = '<tr><td colspan="5" style="text-align:center;color:#6b7280;padding:12px;">No attacks tested yet.</td></tr>'
 
     unsafe_docs = score_data.get("unsafe_documents", [])
-    unsafe_html = (
-        "<ul style='margin:0;padding-left:20px;'>"
-        + "".join([f"<li>🛑 {doc}</li>" for doc in unsafe_docs])
-        + "</ul>"
-        if unsafe_docs
-        else "<p style='color:#10b981;margin:0;'>✅ No blocked documents.</p>"
-    )
+    unsafe_html = ("<ul style='margin:0;padding-left:20px;'>" + "".join([f"<li>🛑 {doc}</li>" for doc in unsafe_docs]) + "</ul>") if unsafe_docs else "<p style='color:#10b981;margin:0;'>✅ No blocked documents.</p>"
 
     html = f"""
     <div style="background:#ffffff;border-radius:12px;padding:24px;border:1px solid #e5e7eb;font-family:-apple-system,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
@@ -101,10 +73,7 @@ def get_security_score_html(username="admin"):
             <strong style="color:#92400e;">👤 Viewing as:</strong> <span style="color:#78350f;font-weight:600;">{username}</span>
         </div>
 
-        <!-- THREE Main Scores Side by Side -->
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:24px;">
-
-            <!-- System Capability Score (Blue) -->
             <div style="background:linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);padding:16px;border-radius:12px;border:2px solid #0ea5e9;">
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
                     <div style="font-size:28px;">{system_score["emoji"]}</div>
@@ -117,7 +86,6 @@ def get_security_score_html(username="admin"):
                 <table style="width:100%;border-collapse:collapse;">{system_rows}</table>
             </div>
 
-            <!-- User Documents Score (Green) -->
             <div style="background:linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);padding:16px;border-radius:12px;border:2px solid #10b981;">
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
                     <div style="font-size:28px;">{user_score["emoji"]}</div>
@@ -127,8 +95,6 @@ def get_security_score_html(username="admin"):
                     </div>
                 </div>
                 <div style="font-size:11px;color:#065f46;margin-bottom:10px;">{user_score["status"]}</div>
-
-                <!-- Document Stats -->
                 <div style="font-size:11px;color:#374151;line-height:1.8;">
                     📄 Scanned: <strong>{user_score["stats"]["documents_scanned"]}</strong><br>
                     ✅ Safe: <strong style="color:#10b981;">{user_score["stats"]["documents_safe"]}</strong><br>
@@ -137,7 +103,6 @@ def get_security_score_html(username="admin"):
                 </div>
             </div>
 
-            <!-- RAG Quality Score (Purple) -->
             <div style="background:linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%);padding:16px;border-radius:12px;border:2px solid #a855f7;">
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
                     <div style="font-size:28px;">{rag_score.get("emoji", "⚪")}</div>
@@ -151,12 +116,10 @@ def get_security_score_html(username="admin"):
             </div>
         </div>
 
-        <!-- Recommendation -->
         <div style="background:#f0f9ff;border-left:4px solid #0ea5e9;padding:12px 16px;border-radius:6px;margin-bottom:20px;">
             <strong style="color:#0369a1;">💡 Recommendation:</strong> <span style="color:#0c4a6e;">{score_data["recommendation"]}</span>
         </div>
 
-        <!-- Statistics Grid -->
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
             <div style="background:#f9fafb;padding:16px;border-radius:8px;">
                 <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">📊 System Statistics</div>
@@ -181,7 +144,6 @@ def get_security_score_html(username="admin"):
             </div>
         </div>
 
-        <!-- Attack Resistance Table -->
         <div style="margin-top:20px;">
             <h3 style="margin:0 0 12px 0;color:#111827;font-size:16px;">🎯 Attack Resistance by Type</h3>
             <table style="width:100%;border-collapse:collapse;font-size:13px;">
@@ -204,24 +166,9 @@ def get_compliance_html():
     except Exception as e:
         return f"<p>Error loading compliance data: {e}</p>"
 
-    owasp_rows = "".join(
-        [
-            f"<tr><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{k}</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{v['status']}</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;font-size:12px;'>{v['implementation']}</td></tr>"
-            for k, v in owasp.items()
-        ]
-    )
-    mitre_rows = "".join(
-        [
-            f"<tr><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{k}</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{v}</td></tr>"
-            for k, v in mitre.items()
-        ]
-    )
-    nist_rows = "".join(
-        [
-            f"<tr><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{k}</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{v}</td></tr>"
-            for k, v in nist.items()
-        ]
-    )
+    owasp_rows = "".join([f"<tr><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{k}</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{v['status']}</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;font-size:12px;'>{v['implementation']}</td></tr>" for k, v in owasp.items()])
+    mitre_rows = "".join([f"<tr><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{k}</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{v}</td></tr>" for k, v in mitre.items()])
+    nist_rows = "".join([f"<tr><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{k}</td><td style='padding:8px;border-bottom:1px solid #e5e7eb;'>{v}</td></tr>" for k, v in nist.items()])
 
     return f"""<div style="display:grid;grid-template-columns:1fr;gap:16px;">
         <div style="background:#ffffff;border-radius:12px;padding:20px;border:1px solid #e5e7eb;"><h3 style="margin:0 0 12px 0;color:#111827;">🔷 OWASP Top 10 for LLMs</h3><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="background:#f3f4f6;"><th style="padding:8px;text-align:left;">Risk</th><th style="padding:8px;text-align:left;">Status</th><th style="padding:8px;text-align:left;">Implementation</th></tr></thead><tbody>{owasp_rows}</tbody></table></div>
@@ -236,21 +183,24 @@ def dashboard_tab(user_state):
     with gr.Tab("Security Dashboard"):
         gr.Markdown("### 🏢 Enterprise RAG Security Evaluation")
         
-        # CRITICAL: Initialize with a placeholder, then update when user_state changes
-        score_html = gr.HTML(value="<p style='text-align:center;color:#6b7280;padding:20px;'>Loading dashboard...</p>")
+        # 🔥 CRITICAL FIX: Start with empty placeholder, force refresh on user_state change
+        score_html = gr.HTML(value="<p style='text-align:center;padding:20px;'>Loading dashboard...</p>")
         
         refresh_btn = gr.Button("🔄 Recalculate Security Score", variant="primary")
         
-        # CRITICAL: Update dashboard when refresh button is clicked
+        # 🔥 CRITICAL: Force refresh when user logs in/changes
+        def refresh_for_user(username):
+            print(f"🔄 Dashboard refresh triggered for user: '{username}'")
+            return get_security_score_html(username if username else "admin")
+        
         refresh_btn.click(
-            fn=lambda u: get_security_score_html(u if u else "admin"),
+            fn=refresh_for_user,
             inputs=[user_state],
             outputs=score_html,
         )
         
-        # CRITICAL: Update dashboard when user logs in/changes
         user_state.change(
-            fn=lambda u: get_security_score_html(u if u else "admin"),
+            fn=refresh_for_user,
             inputs=[user_state],
             outputs=score_html,
         )
