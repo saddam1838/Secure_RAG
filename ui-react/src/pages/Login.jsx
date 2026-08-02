@@ -23,7 +23,8 @@ export default function Login() {
         const { data } = await api.post('/auth/login', { username, password });
         localStorage.setItem('token', data.access_token);
         localStorage.setItem('username', username);
-        toast.success(`Welcome, ${username}!`);
+        localStorage.setItem('role', data.role || 'user'); // 🔥 Store role
+        toast.success(`Welcome, ${username}! (${data.role})`);
         navigate('/dashboard');
       }
     } catch (err) {

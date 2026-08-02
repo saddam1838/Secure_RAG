@@ -9,6 +9,7 @@ if env_path.exists():
     load_dotenv(env_path)
     print(f"✅ Loaded .env from {env_path.absolute()}")
 
+
 class Settings(BaseSettings):
     # Local paths (fallback)
     DATA_DIR: Path = Path("data")
@@ -30,11 +31,6 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 700
     CHUNK_OVERLAP: int = 100
     RETRIEVAL_K: int = 10
-
-    # 🔥 NEW: Security thresholds (loaded from .env or security_rules.json)
-    MAX_DOCUMENT_SIZE_MB: int = int(os.getenv("MAX_DOCUMENT_SIZE_MB", "2"))
-    MAX_QUERY_LENGTH: int = int(os.getenv("MAX_QUERY_LENGTH", "2000"))
-    ML_PROMPT_INJECTION_THRESHOLD: float = float(os.getenv("ML_PROMPT_INJECTION_THRESHOLD", "0.85"))
 
     # Auth
     SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me-in-production")
@@ -63,6 +59,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+
 
 settings = Settings()
 

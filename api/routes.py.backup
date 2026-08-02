@@ -5,7 +5,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from .schemas import QueryRequest, QueryResponse, TokenResponse, LoginRequest, RegisterRequest, ChatRequest, ChatResponse, ScanResponse
-from .dependencies import get_current_user, get_admin_user, create_access_token, verify_password
+from .dependencies import get_current_user, create_access_token, verify_password
 from services.rag_service import RAGService
 from services.benchmark_service import run_benchmark
 from services.audit_service import AuditService
@@ -41,21 +41,7 @@ config_manager = ConfigManager()
 async def react_login(req: LoginRequest):
     success, msg, role = authenticate_user(req.username, req.password)
     if not success:
-        # 🔥 IMPROVED: Clear error message for first-time users
-        if "not found" in msg.lower() or "does not exist" in msg.lower():
-            raise HTTPException(
-                status_code=401, 
-                detail="❌ User not found. Please register first before logging in."
-            )
-        elif "incorrect" in msg.lower() or "invalid" in msg.lower():
-            raise HTTPException(
-                status_code=401, 
-                detail="❌ Incorrect password. Please try again."
-            )
-        else:
-            raise HTTPException(status_code=401, detail=f"❌ {msg}")
-    
-    # 🔥 CRITICAL: Include role in JWT token for RBAC
+        raise HTTPException(status_code=401, detail=msg)
     token = create_access_token({"sub": req.username, "role": role})
     return {"access_token": token, "token_type": "bearer", "username": req.username, "role": role}
 
@@ -169,34 +155,17 @@ async def list_documents(user: str = Depends(get_current_user)):
 
 @app.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: str, user: str = Depends(get_current_user)):
-    """Delete document and all associated chunks from vector store."""
     from services.cloud_storage import cloud_storage
-    
-    filename = None
-    
     if cloud_storage.is_cloud_enabled:
-        # 🔥 CRITICAL: Get filename BEFORE deleting from Supabase
-        try:
-            res = cloud_storage.supabase.table("documents").select("filename").eq("id", doc_id).eq("uploaded_by", user).execute()
-            if res.data:
-                filename = res.data[0]["filename"]
-                print(f"🗑️ Deleting document: {filename} (ID: {doc_id})")
-        except Exception as e:
-            print(f"⚠️ Could not fetch filename: {e}")
-        
-        # Delete from Supabase AND Qdrant (chunks)
         success, msg = cloud_storage.delete_document(doc_id, user)
-        
-        if success and filename:
-            # 🔥 CRITICAL: Also remove from in-memory corpus
-            rag.remove_document_from_memory(os.path.basename(filename))
-            print(f"✅ Deleted from Supabase, Qdrant, and in-memory corpus: {filename}")
-        
+        if success:
+            res = cloud_storage.supabase.table("documents").select("filename").eq("id", doc_id).execute()
+            if res.data: 
+                rag.remove_document_from_memory(os.path.basename(res.data[0]["filename"]))
         return {"success": success, "message": msg}
-    else:
-        # Local storage - just remove from FAISS
-        rag.remove_document_from_memory(doc_id)
-        return {"success": True, "message": f"Deleted {doc_id}"}
+    
+    rag.remove_document_from_memory(doc_id)
+    return {"success": True, "message": f"Deleted {doc_id}"}
 
 # ============ DASHBOARD ============
 @app.get("/api/dashboard")

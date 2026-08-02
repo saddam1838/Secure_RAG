@@ -81,7 +81,7 @@ class CloudStorageService:
         return result.data[0] if result.data else None
 
     def save_document(self, filename: str, content_hash: str, content: str, size_mb: float,
-                     uploaded_by: str, is_safe: bool, scan_issues: List[Dict]) -> Tuple[bool, str]:
+                     uploaded_by: str, is_safe: bool, scan_issues: List[Dict], ) -> Tuple[bool, str]:
         if not self.is_cloud_enabled:
             return False, "Cloud storage not available"
         try:
@@ -96,6 +96,7 @@ class CloudStorageService:
                 "uploaded_by": uploaded_by,
                 "is_safe": is_safe,
                 "scan_issues": json.dumps(scan_issues) if scan_issues else None,
+                
             }).execute()
             return True, "Document saved"
         except Exception as e:
@@ -113,8 +114,12 @@ class CloudStorageService:
                 .eq("file_hash", user_specific_hash)
                 .execute()
             )
-            return len(result.data) > 0
-        except Exception:
+            exists = len(result.data) > 0
+            if exists:
+                print(f"⚠️ Document with hash '{user_specific_hash}' still exists in Supabase for '{username}'")
+            return exists
+        except Exception as e:
+            print(f"❌ Error checking document existence: {e}")
             return False
 
     def get_all_safe_documents(self) -> List[Dict]:

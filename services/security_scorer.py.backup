@@ -127,16 +127,15 @@ class SecurityScorer:
         
         if cloud_storage.is_cloud_enabled:
             try:
-                # 1. Get document metadata from Supabase
+                # Query Supabase for document metadata
                 all_docs = cloud_storage.supabase.table("documents").select("id, is_safe, filename, uploaded_by").eq("uploaded_by", username).execute().data
                 total_scans = len(all_docs)
                 safe_scans = sum(1 for d in all_docs if d.get("is_safe"))
                 unsafe_documents = [d.get("filename") for d in all_docs if not d.get("is_safe")]
                 
-                # 2. DIRECT QDRANT COUNT (Absolute Source of Truth for chunks)
+                # 🔥 CRITICAL FIX: Query Qdrant directly for accurate chunk count
                 try:
                     from qdrant_client.models import Filter, FieldCondition, MatchValue
-                    from config import settings
                     result = cloud_storage.qdrant.count(
                         collection_name=settings.QDRANT_COLLECTION,
                         count_filter=Filter(
@@ -146,14 +145,14 @@ class SecurityScorer:
                     )
                     total_chunks = result.count
                     print(f"✅ Qdrant chunk count for '{username}': {total_chunks}")
-                except Exception as q_err:
-                    print(f"⚠️ Qdrant count failed: {q_err}")
+                except Exception as qdrant_err:
+                    print(f"⚠️ Qdrant count failed: {qdrant_err}")
                     total_chunks = 0
                     
             except Exception as e:
                 print(f"⚠️ Failed to fetch document stats: {e}")
         else:
-            # Local fallback
+            # Local storage fallback
             from services.rag_service import RAGService
             rag = RAGService()
             user_chunks = [m for m in rag.metadata if m.get("uploaded_by") == username]
@@ -163,24 +162,48 @@ class SecurityScorer:
         
         if total_scans == 0:
             return {
-                "overall_score": 0.0, "status": "No Documents", "color": "#6b7280", "emoji": "⚪", 
+                "overall_score": 0.0, 
+                "status": "No Documents", 
+                "color": "#6b7280", 
+                "emoji": "⚪", 
                 "breakdown": {"Document Safety": 0.0, "Knowledge Coverage": 0.0}, 
                 "stats": {"documents_scanned": 0, "documents_safe": 0, "documents_blocked": 0, "total_chunks": 0}, 
-                "unsafe_documents": [], "recommendation": "Upload documents to start building your knowledge base."
+                "unsafe_documents": [], 
+                "recommendation": "Upload documents to start building your knowledge base."
             }
         
         doc_safety_score = safe_scans / total_scans * 100
         quality_score = min(100.0, (total_chunks / 50) * 10)
         final_score = (doc_safety_score * 0.70) + (quality_score * 0.30)
         
-        status, color, emoji = ("Excellent", "#10b981", "🟢") if final_score >= 90 else ("Good", "#f59e0b", "🟡") if final_score >= 75 else ("Fair", "#f97316", "🟠") if final_score >= 50 else ("Needs Attention", "#ef4444", "🔴")
-        recommendation = "Your documents are secure and well-indexed." if final_score >= 90 else "Review blocked documents." if doc_safety_score < 80 else "Upload more documents to improve coverage." if quality_score < 50 else "Your document collection is in good shape."
+        status, color, emoji = (
+            ("Excellent", "#10b981", "🟢") if final_score >= 90 
+            else ("Good", "#f59e0b", "🟡") if final_score >= 75 
+            else ("Fair", "#f97316", "🟠") if final_score >= 50 
+            else ("Needs Attention", "#ef4444", "🔴")
+        )
+        
+        recommendation = (
+            "Your documents are secure and well-indexed." if final_score >= 90 
+            else "Review blocked documents." if doc_safety_score < 80 
+            else "Upload more documents to improve coverage." if quality_score < 50 
+            else "Your document collection is in good shape."
+        )
         
         return {
-            "overall_score": round(final_score, 1), "status": status, "color": color, "emoji": emoji,
+            "overall_score": round(final_score, 1), 
+            "status": status, 
+            "color": color, 
+            "emoji": emoji,
             "breakdown": {"Document Safety": round(doc_safety_score, 1), "Knowledge Coverage": round(quality_score, 1)},
-            "stats": {"documents_scanned": total_scans, "documents_safe": safe_scans, "documents_blocked": total_scans - safe_scans, "total_chunks": total_chunks},
-            "unsafe_documents": unsafe_documents[:5], "recommendation": recommendation,
+            "stats": {
+                "documents_scanned": total_scans, 
+                "documents_safe": safe_scans, 
+                "documents_blocked": total_scans - safe_scans, 
+                "total_chunks": total_chunks
+            },
+            "unsafe_documents": unsafe_documents[:5], 
+            "recommendation": recommendation,
         }
 
     @staticmethod
