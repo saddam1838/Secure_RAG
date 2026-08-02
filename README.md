@@ -8,9 +8,10 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![Hugging Face](https://img.shields.io/badge/HuggingFace-Models-FFD21E?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)
 
-**Enterprise Secure RAG** is a secure Retrieval-Augmented Generation (RAG) platform that protects Large Language Models (LLMs) from prompt injection attacks while providing accurate, citation-based responses from uploaded documents.
+**Enterprise Secure RAG** is a production-ready Retrieval-Augmented Generation (RAG) platform that combines semantic search with multi-layer AI security to defend against prompt injection attacks, malicious documents, and unsafe model outputs.
 
 </div>
 
@@ -18,71 +19,81 @@
 
 # 📖 Overview
 
-Enterprise Secure RAG combines modern AI technologies with enterprise-grade security to build safe and reliable LLM applications. The platform enables secure document ingestion, semantic search, and intelligent question answering while applying multiple security layers to defend against prompt injection and malicious inputs.
-
-Whether deployed locally or in the cloud, the platform is designed to provide a secure and scalable foundation for enterprise AI applications.
+Enterprise Secure RAG enables users to securely upload documents, build a searchable knowledge base, and interact with Large Language Models through a protected RAG pipeline. The platform integrates document scanning, prompt injection detection, semantic retrieval, reranking, and output validation to deliver secure and reliable AI responses.
 
 ---
 
 # ✨ Features
 
 - 🔒 Multi-layer Prompt Injection Detection
-- 📄 Secure Document Upload & Indexing
-- 🤖 Hybrid RAG Pipeline
-- 🔍 Attack Simulator
-- 📊 Security Dashboard
+- 📄 Secure Document Upload & Processing
+- 🤖 Hybrid Retrieval-Augmented Generation (RAG)
+- 🔍 Semantic Search & Cross-Encoder Reranking
+- 🛡️ AI Output Guardrails
 - 📚 Citation-Based Responses
 - 👤 JWT Authentication
+- 📊 Security Dashboard
 - 📝 Audit Logging
-- ☁️ Local & Cloud Storage Support
+- ☁️ FAISS & Qdrant Support
 - 🐳 Docker Deployment
 
 ---
 
-# 🏗️ System Architecture
+# 🏗️ Architecture
 
 ```text
-                    React Frontend
-                           │
-                           ▼
-                   FastAPI REST API
-                           │
-      ┌────────────────────┼────────────────────┐
-      ▼                    ▼                    ▼
- Authentication      Security Layer      RAG Pipeline
-      │                    │                    │
-      └────────────────────┼────────────────────┘
-                           ▼
-          Vector Database (Qdrant / FAISS)
-                           │
-                           ▼
-              PostgreSQL / Supabase
+                 React Frontend
+                        │
+                        ▼
+                FastAPI REST API
+                        │
+        ┌───────────────┼───────────────┐
+        ▼               ▼               ▼
+ Authentication   Security Layer   RAG Pipeline
+        │               │               │
+        └───────────────┼───────────────┘
+                        ▼
+        Vector Database (FAISS / Qdrant)
+                        │
+                        ▼
+           PostgreSQL / Supabase
 ```
 
 ---
 
-# 🛡️ Security Pipeline
+# 🤖 AI Models Used
+
+| Model | Purpose |
+|------|---------|
+| **sentence-transformers/all-MiniLM-L6-v2** | Dense document and query embeddings |
+| **cross-encoder/ms-marco-MiniLM-L-6-v2** | Semantic reranking of retrieved documents |
+| **google/flan-t5-large** | Response generation |
+| **meta-llama/Prompt-Guard-86M** | Primary prompt injection detection |
+| **ProtectAI/deberta-v3-base-prompt-injection-v2** | Fallback prompt injection detector |
+| **unitary/toxic-bert** | Toxicity detection and output filtering |
+
+### AI Pipeline
 
 ```text
 User Query
      │
      ▼
-Regex Validation
+Prompt Injection Detection
      │
      ▼
-ML Prompt Injection Detection
+Embedding Generation
      │
      ▼
-LLM Safety Validation
+Vector Search
      │
      ▼
-Hybrid Document Retrieval
+Cross-Encoder Reranking
      │
      ▼
-Response Generation
+FLAN-T5 Response Generation
      │
      ▼
-Output Guardrails
+Toxicity Filtering
      │
      ▼
 Secure Response
@@ -96,13 +107,11 @@ Secure Response
 |----------|--------------|
 | Frontend | React, Vite, Tailwind CSS |
 | Backend | FastAPI, Python |
-| Database | PostgreSQL, Supabase |
-| Vector Database | Qdrant, FAISS |
 | Authentication | JWT |
-| Cache | Redis |
-| Embeddings | Sentence Transformers |
-| Language Model | FLAN-T5 |
-| Deployment | Docker & Docker Compose |
+| Database | PostgreSQL, Supabase |
+| Vector Database | FAISS, Qdrant |
+| AI Framework | Hugging Face Transformers |
+| Deployment | Docker, Docker Compose |
 
 ---
 
@@ -116,16 +125,15 @@ enterprise-secure-rag/
 ├── models/
 ├── ui-react/
 ├── utils/
-├── tests/
 ├── docs/
+├── tests/
 │
 ├── app.py
 ├── config.py
 ├── database.py
 ├── document_scanner.py
-├── docker-compose.yml
 ├── Dockerfile
-├── nginx.conf
+├── docker-compose.yml
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -138,50 +146,35 @@ enterprise-secure-rag/
 ### Clone the Repository
 
 ```bash
-git clone https://github.com/saddam1838/saddam1838-secure_rag.git
+git clone [https://github.com/saddam1838/saddam1838-secure_rag.git](https://github.com/saddam1838/Secure_RAG.git)
 
-cd saddam1838-secure_rag
+cd Secure_RAG
 ```
 
 ### Configure Environment
-
-Copy the example environment file.
 
 ```bash
 cp .env.example .env
 ```
 
-Edit the `.env` file and update the required values.
+Update the required environment variables inside `.env`.
 
 ### Example `.env.example`
 
 ```env
-# ==========================================
-# Enterprise Secure RAG - Environment Configuration
-# ==========================================
-# Copy this file to .env and fill in your actual values.
-# NEVER commit the real .env file to version control!
+SECRET_KEY=change-me-to-a-random-32-character-string
 
-# 1. CORE SECURITY & AUTHENTICATION
-SECRET_KEY=change-me-to-a-random-32-character-string-in-production
-BCRYPT_HASH=
-
-# 2. CLOUD STORAGE
 USE_CLOUD_STORAGE=false
 
-# Qdrant Cloud
-QDRANT_URL=https://your-cluster-url.qdrant.io:6333
-QDRANT_API_KEY=your-qdrant-api-key-here
+QDRANT_URL=https://your-cluster.qdrant.io:6333
+QDRANT_API_KEY=your-qdrant-api-key
 QDRANT_COLLECTION=rag_documents
 
-# Supabase
-SUPABASE_URL=https://your-project-id.supabase.co
+SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your-supabase-key
 
-# 3. Hugging Face
 HF_TOKEN=
 
-# 4. Security Settings
 MAX_DOCUMENT_SIZE_MB=2
 MAX_QUERY_LENGTH=2000
 ML_PROMPT_INJECTION_THRESHOLD=0.85
@@ -193,7 +186,7 @@ ML_PROMPT_INJECTION_THRESHOLD=0.85
 docker compose up --build
 ```
 
-### Access the Platform
+### Access the Application
 
 | Service | URL |
 |----------|-----|
@@ -203,53 +196,38 @@ docker compose up --build
 
 ---
 
-# 📊 Core Modules
+# 🛡️ Security Features
 
-- 💬 Secure Chat Interface
-- 📂 Document Upload & Management
-- 🔍 Semantic Search
-- 🤖 Hybrid RAG Engine
-- 🛡️ Prompt Injection Detection
-- ⚔️ Attack Simulator
-- 📊 Security Dashboard
-- 📜 Audit Logs
-
----
-
-# 🔒 Security Features
-
-- Multi-layer prompt injection defense
-- Secure document scanning
-- JWT authentication
-- Role-based access control
-- Query validation
-- Output guardrails
-- Audit logging
-- Configurable security policies
-- Local & cloud deployment support
+- Prompt Injection Detection
+- Document Security Scanning
+- Query Validation
+- Toxic Output Filtering
+- JWT Authentication
+- Role-Based Access Control
+- Audit Logging
+- Configurable Security Policies
 
 ---
 
 # 📦 Deployment
 
-The application supports multiple deployment options:
+Supported deployment options:
 
 - Docker & Docker Compose
 - Local Development
+- FAISS (Local)
 - Qdrant Cloud
-- Supabase Cloud
-- Local SQLite + FAISS
+- PostgreSQL / Supabase
 
 ---
 
-# 📈 Roadmap
+# 🗺️ Roadmap
 
 - ✅ Secure RAG Pipeline
 - ✅ Authentication & Authorization
-- ✅ Document Upload & Indexing
 - ✅ Prompt Injection Detection
+- ✅ Document Upload & Retrieval
 - ✅ Security Dashboard
-- ✅ Attack Simulator
 - ⏳ Kubernetes Deployment
 - ⏳ CI/CD Pipeline
 - ⏳ Multi-Tenant Support
@@ -260,26 +238,17 @@ The application supports multiple deployment options:
 
 Contributions are welcome!
 
-1. Fork the repository.
-2. Create a feature branch.
-
 ```bash
+# Fork the repository
+
 git checkout -b feature/my-feature
-```
 
-3. Commit your changes.
-
-```bash
 git commit -m "Add new feature"
-```
 
-4. Push your branch.
-
-```bash
 git push origin feature/my-feature
 ```
 
-5. Open a Pull Request.
+Open a Pull Request describing your changes.
 
 ---
 
@@ -291,22 +260,22 @@ This project is licensed under the **MIT License**.
 
 # 🙏 Acknowledgements
 
-This project is built using several excellent open-source technologies:
+This project is built using:
 
 - FastAPI
 - React
 - Docker
-- Qdrant
-- FAISS
-- Supabase
-- Hugging Face
+- Hugging Face Transformers
 - Sentence Transformers
+- FAISS
+- Qdrant
+- Supabase
 
 ---
 
 <div align="center">
 
-### ⭐ If you found this project useful, consider giving it a star on GitHub!
+### ⭐ If you found this project useful, consider giving it a Star!
 
 Built with ❤️ using **FastAPI**, **React**, **Docker**, and modern **AI Security** technologies.
 
