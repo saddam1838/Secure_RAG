@@ -26,22 +26,43 @@ def _get_cached_benchmark():
 
 
 def _compute_quick_rag_quality(username):
-    """Compute a basic RAG quality score from local data (no LLM)."""
-    from services.rag_service import RAGService
-    rag = RAGService()
-    # If not loaded, try to load
-    if not rag.corpus or len(rag.corpus) == 0:
-        rag.load_user_data(username)
-    chunk_count = len(rag.corpus)
+    """Compute a basic RAG quality score directly from Qdrant count (no LLM, no buggy RAGService reload)."""
+    if not username:
+        return {"has_documents": False, "overall_score": 0, "status": "No Documents", "color": "#6b7280", "emoji": "⚪", "metrics": {}}
+        
+    from services.cloud_storage import cloud_storage
+    from config import settings
+    
+    chunk_count = 0
+    if cloud_storage.is_cloud_enabled:
+        try:
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            # Use the exact same reliable count method as the "Your Documents" card
+            result = cloud_storage.qdrant.count(
+                collection_name=settings.QDRANT_COLLECTION,
+                count_filter=Filter(
+                    must=[FieldCondition(key="uploaded_by", match=MatchValue(value=username))]
+                ),
+                exact=True,
+            )
+            chunk_count = result.count
+        except Exception as e:
+            print(f"⚠️ Qdrant count failed in RAG quality: {e}")
+    else:
+        # Local fallback
+        from services.rag_service import rag_service
+        chunk_count = len(rag_service.corpus)
+
     if chunk_count == 0:
         return {"has_documents": False, "overall_score": 0, "status": "No Documents", "color": "#6b7280", "emoji": "⚪", "metrics": {}}
     
-    # Basic metrics based on chunk count (assume good quality if many chunks)
-    score = min(100, chunk_count * 2)  # 50 chunks => 100%
+    # Basic metrics based on chunk count (50 chunks => 100%)
+    score = min(100, chunk_count * 2)
     status = "Good" if score >= 70 else "Fair" if score >= 40 else "Needs Improvement"
     color = "#10b981" if score >= 70 else "#f59e0b" if score >= 40 else "#ef4444"
     emoji = "🟢" if score >= 70 else "🟡" if score >= 40 else "🔴"
     
+    metric_val = score / 100.0
     return {
         "has_documents": True,
         "overall_score": score,
@@ -49,10 +70,10 @@ def _compute_quick_rag_quality(username):
         "color": color,
         "emoji": emoji,
         "metrics": {
-            "precision@k": score / 100,
-            "mrr": score / 100,
-            "ndcg@k": score / 100,
-            "avg_relevance": score / 100
+            "precision@k": metric_val,
+            "mrr": metric_val,
+            "ndcg@k": metric_val,
+            "avg_relevance": metric_val
         }
     }
 

@@ -88,60 +88,22 @@ Rate relevance (0=not relevant, 1=partially relevant, 2=relevant, 3=highly relev
         self, rag_service, num_queries=3, k=3, progress_callback=None
     ) -> Dict:
         """
-        Dynamically evaluates RAG by sampling random chunks from the user's corpus,
-        using them as queries, and checking if the system retrieves the original content.
-        Supports both local (in-memory) and cloud (Qdrant) storage.
+        Dynamically evaluates RAG by sampling random chunks from the user's corpus.
+        Uses the multi-user isolated local FAISS/memory.
         """
-        # If cloud storage is enabled and local corpus is empty, fetch from Qdrant
-        if rag_service.use_cloud and (not rag_service.corpus or len(rag_service.corpus) == 0):
-            from services.cloud_storage import cloud_storage
-            from config import settings
-            import random
-
-            username = getattr(rag_service, 'current_user', None)
-            if username:
-                from qdrant_client.models import Filter, FieldCondition, MatchValue
-                scroll_result = cloud_storage.qdrant.scroll(
-                    collection_name=settings.QDRANT_COLLECTION,
-                    scroll_filter=Filter(
-                        must=[FieldCondition(key="uploaded_by", match=MatchValue(value=username))]
-                    ),
-                    limit=1000,
-                    with_payload=True,
-                    with_vectors=False
-                )
-                points = scroll_result[0]
-            else:
-                scroll_result = cloud_storage.qdrant.scroll(
-                    collection_name=settings.QDRANT_COLLECTION,
-                    limit=1000,
-                    with_payload=True,
-                    with_vectors=False
-                )
-                points = scroll_result[0]
-
-            if not points:
-                return {"has_documents": False, "error": "No documents found in cloud storage for this user."}
-
-            corpus = []
-            metadata = []
-            for p in points:
-                payload = p.payload
-                text = payload.get("text", "")
-                if text:
-                    corpus.append(text)
-                    metadata.append({
-                        "chunk_id": payload.get("chunk_id", str(p.id)),
-                        "source": payload.get("source", "unknown"),
-                        "uploaded_by": payload.get("uploaded_by", "unknown")
-                    })
-            # Also store back into rag_service for subsequent calls
-            rag_service.corpus = corpus
-            rag_service.metadata = metadata
-        else:
-            # Local storage: use in-memory data
-            corpus = rag_service.corpus
-            metadata = rag_service.metadata
+        username = getattr(rag_service, 'current_user', None)
+        if not username:
+            return {"has_documents": False, "error": "No user context provided."}
+            
+        # Get user-specific isolated corpus
+        corpus = rag_service.user_corpuses.get(username, [])
+        metadata = rag_service.user_metadatas.get(username, [])
+        
+        # If local is empty, try loading from cloud
+        if not corpus and rag_service.use_cloud:
+            rag_service.load_user_data(username)
+            corpus = rag_service.user_corpuses.get(username, [])
+            metadata = rag_service.user_metadatas.get(username, [])
 
         if not corpus or len(corpus) < num_queries:
             return {
@@ -152,7 +114,6 @@ Rate relevance (0=not relevant, 1=partially relevant, 2=relevant, 3=highly relev
         # Cache key based on current chunk IDs
         chunk_ids = [m.get("chunk_id") for m in metadata]
         cache_key = self._cache_key(chunk_ids)
-
         cached = self._get_cached(cache_key)
         if cached:
             return cached
@@ -161,50 +122,43 @@ Rate relevance (0=not relevant, 1=partially relevant, 2=relevant, 3=highly relev
         indices = random.sample(range(len(corpus)), num_queries)
         all_results = []
         all_metrics = []
-
         for idx, i in enumerate(indices):
             if progress_callback:
                 progress_callback(
                     (idx + 1) / num_queries,
                     f"Evaluating dynamic query {idx + 1}/{num_queries}...",
                 )
-
             target_chunk = corpus[i]
             target_metadata = metadata[i]
             target_chunk_id = target_metadata.get("chunk_id", f"chunk_{i}")
-
+            
             # Create a dynamic query from the chunk itself
             words = target_chunk.split()
             if len(words) > 15:
                 query = "Explain the context of: " + " ".join(words[:10]) + "..."
             else:
                 query = "Explain: " + target_chunk
-
+                
             # Retrieve
             retrieved = rag_service.retrieve(query, k=k)
-
+            
             # Evaluate with LLM
             judgments = []
             for rank, r in enumerate(retrieved):
                 score, reasoning = self.judge_chunk_relevance(query, r.get("text", ""))
-
                 # If it's the exact original chunk, guarantee it's marked as highly relevant
                 is_exact_match = r.get("chunk_id") == target_chunk_id
                 final_score = 3 if is_exact_match else score
-
                 judgments.append(
                     {
                         "rank": rank + 1,
                         "chunk_id": r.get("chunk_id"),
                         "source": r.get("source", "unknown"),
                         "relevance_score": final_score,
-                        "reasoning": reasoning
-                        if not is_exact_match
-                        else "Exact original chunk matched",
+                        "reasoning": reasoning if not is_exact_match else "Exact original chunk matched",
                         "is_relevant": final_score >= 2,
                     }
                 )
-
             metrics = self._compute_metrics(judgments)
             all_results.append(
                 {
@@ -219,14 +173,10 @@ Rate relevance (0=not relevant, 1=partially relevant, 2=relevant, 3=highly relev
         # Aggregate
         if all_metrics:
             avg_metrics = {
-                "precision@k": round(
-                    np.mean([m["precision@k"] for m in all_metrics]), 3
-                ),
+                "precision@k": round(np.mean([m["precision@k"] for m in all_metrics]), 3),
                 "mrr": round(np.mean([m["mrr"] for m in all_metrics]), 3),
                 "ndcg@k": round(np.mean([m["ndcg@k"] for m in all_metrics]), 3),
-                "avg_relevance": round(
-                    np.mean([m["avg_relevance"] for m in all_metrics]), 2
-                ),
+                "avg_relevance": round(np.mean([m["avg_relevance"] for m in all_metrics]), 2),
             }
         else:
             avg_metrics = {"precision@k": 0, "mrr": 0, "ndcg@k": 0, "avg_relevance": 0}
@@ -239,9 +189,9 @@ Rate relevance (0=not relevant, 1=partially relevant, 2=relevant, 3=highly relev
             "average_metrics": avg_metrics,
             "per_query_results": all_results,
         }
-
         self._set_cache(cache_key, final_result)
         return final_result
+
 
     def _compute_metrics(self, judgments: List[Dict]) -> Dict:
         if not judgments:

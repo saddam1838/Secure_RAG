@@ -44,15 +44,15 @@ async def react_login(req: LoginRequest):
         if "not found" in msg.lower() or "does not exist" in msg.lower():
             raise HTTPException(
                 status_code=401, 
-                detail="❌ User not found. Please register first before logging in."
+                detail="User not found. Please register first before logging in."
             )
         elif "incorrect" in msg.lower() or "invalid" in msg.lower():
             raise HTTPException(
                 status_code=401, 
-                detail="❌ Incorrect password. Please try again."
+                detail="Incorrect password. Please try again."
             )
         else:
-            raise HTTPException(status_code=401, detail=f"❌ {msg}")
+            raise HTTPException(status_code=401, detail=msg)
     
     token = create_access_token({"sub": req.username, "role": role})
     
@@ -145,14 +145,14 @@ async def list_documents(user: str = Depends(get_current_user)):
         result = cloud_storage.supabase.table("documents").select("id, filename, size_mb, created_at, is_safe").eq("uploaded_by", user).order("created_at", desc=True).execute()
         return result.data
     
+    user_metas = rag.user_metadatas.get(user, [])
     seen = set()
     docs = []
-    for m in rag.metadata:
-        if m.get("uploaded_by") == user:
-            fname = m.get("source", "unknown")
-            if fname not in seen:
-                seen.add(fname)
-                docs.append({"id": fname, "filename": fname, "size_mb": 0, "created_at": "Local", "is_safe": True})
+    for m in user_metas:
+        fname = m.get("source", "unknown")
+        if fname not in seen:
+            seen.add(fname)
+            docs.append({"id": fname, "filename": fname, "size_mb": 0, "created_at": "Local", "is_safe": True})
     return docs
 
 @app.delete("/api/documents/{doc_id}")
@@ -174,12 +174,12 @@ async def delete_document(doc_id: str, user: str = Depends(get_current_user)):
         success, msg = cloud_storage.delete_document(doc_id, user)
         
         if success and filename:
-            rag.remove_document_from_memory(os.path.basename(filename))
+            rag.remove_document_from_memory(os.path.basename(filename), user)
             print(f"✅ Deleted from Supabase, Qdrant, and in-memory corpus: {filename}")
         
         return {"success": success, "message": msg}
     else:
-        rag.remove_document_from_memory(doc_id)
+        rag.remove_document_from_memory(doc_id, user)
         return {"success": True, "message": f"Deleted {doc_id}"}
 
 # ============ DASHBOARD ============
@@ -297,31 +297,22 @@ async def compliance(): return config_manager.get_compliance_details()
 # ============ EVALUATE ============
 @app.post("/api/evaluate")
 async def evaluate(user: str = Depends(get_current_user)):
-    # Check if user has documents via cloud storage or local
-    from services.cloud_storage import cloud_storage
-    has_docs = False
-    if cloud_storage.is_cloud_enabled:
-        result = cloud_storage.supabase.table("documents")\
-            .select("id", count="exact")\
-            .eq("uploaded_by", user)\
-            .eq("is_safe", True)\
-            .execute()
-        has_docs = (result.count > 0) if hasattr(result, 'count') else len(result.data) > 0
-    else:
-        user_docs = [m for m in rag.metadata if m.get("uploaded_by") == user]
-        has_docs = len(user_docs) > 0
+    # Ensure local corpus is loaded for this specific user
+    rag.load_user_data(user)
     
-    if not has_docs:
-        return {"has_documents": False, "error": f"No safe documents found for '{user}'. Please upload documents first."}
-    
-    # Ensure local corpus is loaded
-    if len(rag.corpus) == 0:
-        rag.load_user_data(user)
+    # Use the new multi-user isolated corpus
+    user_corpus = rag.user_corpuses.get(user, [])
+    if not user_corpus:
+        return {"has_documents": False, "error": f"No documents found for '{user}'. Please upload documents first."}
+        
+    # Set context so evaluator uses the correct user's FAISS
+    rag.current_user = user
+    num_queries = min(3, len(user_corpus))
     
     evaluator = LLMJudgeEvaluator()
-    return evaluator.run_dynamic_evaluation(rag, num_queries=3, k=3)
+    return evaluator.run_dynamic_evaluation(rag, num_queries=num_queries, k=min(3, len(user_corpus)))
 
-# ============ METRICS & HEALTH ============
+
 @app.get("/metrics")
 def metrics(): return Response(generate_latest(), media_type="text/plain")
 

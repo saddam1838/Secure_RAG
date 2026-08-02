@@ -78,16 +78,17 @@ def register_user(username: str, password: str) -> Tuple[bool, str]:
 def authenticate_user(username: str, password: str) -> Tuple[bool, str, str]:
     """Authenticate a user against the active database."""
     user = None
-
     # Try cloud first
     if cloud_storage.is_cloud_enabled:
         user = cloud_storage.get_user(username)
+        if not user:
+            return False, "User not found. Please register first.", ""
         if user and bcrypt.checkpw(
             password.encode("utf-8"), user["password_hash"].encode("utf-8")
         ):
             return True, "Login successful", user["role"]
-        return False, "Invalid username or password", ""
-
+        return False, "Incorrect password. Please try again.", ""
+    
     # Fallback to SQLite
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -96,12 +97,14 @@ def authenticate_user(username: str, password: str) -> Tuple[bool, str, str]:
     )
     user_row = cursor.fetchone()
     conn.close()
-
+    
+    if not user_row:
+        return False, "User not found. Please register first.", ""
     if user_row and bcrypt.checkpw(
         password.encode("utf-8"), user_row[0].encode("utf-8")
     ):
         return True, "Login successful", user_row[1]
-    return False, "Invalid username or password", ""
+    return False, "Incorrect password. Please try again.", ""
 
 
 # Initialize on import
