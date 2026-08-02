@@ -25,55 +25,69 @@ def _get_cached_benchmark():
         return {"total_attacks": 0, "blocked": 0, "by_type": {}}
 
 
-def _compute_quick_rag_quality(username):
-    """Compute a basic RAG quality score from local data (no LLM)."""
-    from services.rag_service import RAGService
-    rag = RAGService()
-    # If not loaded, try to load
-    if not rag.corpus or len(rag.corpus) == 0:
-        rag.load_user_data(username)
-    chunk_count = len(rag.corpus)
-    if chunk_count == 0:
-        return {"has_documents": False, "overall_score": 0, "status": "No Documents", "color": "#6b7280", "emoji": "⚪", "metrics": {}}
-    
-    # Basic metrics based on chunk count (assume good quality if many chunks)
-    score = min(100, chunk_count * 2)  # 50 chunks => 100%
-    status = "Good" if score >= 70 else "Fair" if score >= 40 else "Needs Improvement"
-    color = "#10b981" if score >= 70 else "#f59e0b" if score >= 40 else "#ef4444"
-    emoji = "🟢" if score >= 70 else "🟡" if score >= 40 else "🔴"
-    
-    return {
-        "has_documents": True,
-        "overall_score": score,
-        "status": status,
-        "color": color,
-        "emoji": emoji,
-        "metrics": {
-            "precision@k": score / 100,
-            "mrr": score / 100,
-            "ndcg@k": score / 100,
-            "avg_relevance": score / 100
-        }
-    }
-
-
 def _get_cached_rag_quality(username=None):
     """
-    RAG quality evaluation - returns a quick score from local data immediately.
-    Full LLM evaluation is triggered separately via /api/evaluate.
+    RAG quality evaluation - now user-specific if username is provided.
+    If no username, it checks global (but that's deprecated).
     """
+    # For user-specific, we won't cache globally; we'll compute on demand.
+    # We'll use a simple cache per user with shorter TTL.
+    # For simplicity, we'll just compute fresh each time (since it's called rarely).
     if username is None:
         # Fallback to system-wide (but that will likely be empty)
         current_time = time.time()
         if _rag_cache["data"] is not None and (current_time - _rag_cache["timestamp"]) < _CACHE_DURATION:
             return _rag_cache["data"]
-    # Use quick score (no LLM) for instant response
-    quick = _compute_quick_rag_quality(username)
-    # Cache only if no username
-    if username is None:
-        _rag_cache["data"] = quick
-        _rag_cache["timestamp"] = time.time()
-    return quick
+    try:
+        from services.rag_service import RAGService
+        rag = RAGService()
+        # Store username in rag for later use in evaluator
+        rag.current_user = username
+
+        # Check if user has documents in Supabase
+        from services.cloud_storage import cloud_storage
+        if cloud_storage.is_cloud_enabled:
+            # Query documents table for this user
+            result = cloud_storage.supabase.table("documents")                .select("id", count="exact")                .eq("uploaded_by", username)                .eq("is_safe", True)                .execute()
+            doc_count = result.count if hasattr(result, 'count') else len(result.data)
+            if doc_count == 0:
+                result_dict = {"has_documents": False, "overall_score": 0, "status": "No Documents", "color": "#6b7280", "emoji": "⚪", "metrics": {}}
+                if username is None:
+                    _rag_cache["data"] = result_dict
+                    _rag_cache["timestamp"] = current_time
+                return result_dict
+        else:
+            # Local: check in-memory corpus
+            if len(rag.corpus) == 0:
+                result_dict = {"has_documents": False, "overall_score": 0, "status": "No Documents", "color": "#6b7280", "emoji": "⚪", "metrics": {}}
+                if username is None:
+                    _rag_cache["data"] = result_dict
+                    _rag_cache["timestamp"] = current_time
+                return result_dict
+
+        # If we have documents, run evaluation (may be slow, but we'll do it on demand)
+        from services.llm_evaluator import LLMJudgeEvaluator
+        print(f"🔄 Running RAG quality evaluation for user '{username}'...")
+        evaluator = LLMJudgeEvaluator()
+        # Now pass username to evaluator (we already stored it)
+        results = evaluator.run_dynamic_evaluation(rag, num_queries=2, k=3)
+        
+        if not results.get("has_documents"):
+            result_dict = {"has_documents": False, "overall_score": 0, "status": "No Documents", "color": "#6b7280", "emoji": "⚪", "metrics": {}}
+        else:
+            avg = results["average_metrics"]
+            overall = (avg.get("precision@k", 0) * 0.3 + avg.get("mrr", 0) * 0.3 + avg.get("ndcg@k", 0) * 0.3 + (avg.get("avg_relevance", 0) / 3) * 0.1) * 100
+            status, color, emoji = ("Excellent", "#10b981", "🟢") if overall >= 75 else ("Good", "#f59e0b", "🟡") if overall >= 55 else ("Fair", "#f97316", "🟠") if overall >= 35 else ("Needs Improvement", "#ef4444", "🔴")
+            result_dict = {"has_documents": True, "overall_score": round(overall, 1), "status": status, "color": color, "emoji": emoji, "metrics": avg}
+        
+        # Cache only if no username (system-wide)
+        if username is None:
+            _rag_cache["data"] = result_dict
+            _rag_cache["timestamp"] = current_time
+        return result_dict
+    except Exception as e:
+        print(f"⚠️ RAG quality evaluation failed: {e}")
+        return {"has_documents": True, "overall_score": 0, "status": "Error", "color": "#6b7280", "emoji": "⚪", "metrics": {}}
 
 
 def _get_cached_document_security():
@@ -200,7 +214,7 @@ class SecurityScorer:
     def calculate_posture_score(username: str = "admin") -> dict:
         system_score = SecurityScorer.calculate_system_capability_score()
         user_score = SecurityScorer.calculate_user_documents_score(username)
-        rag_score = _get_cached_rag_quality(username)  # now user-specific
+        rag_score = _get_cached_rag_quality(username)
 
         user_rag_score = rag_score if user_score["stats"]["documents_scanned"] > 0 else {"has_documents": False, "overall_score": 0, "status": "No Documents", "color": "#6b7280", "emoji": "⚪", "metrics": {}}
 

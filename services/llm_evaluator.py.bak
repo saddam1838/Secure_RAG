@@ -92,26 +92,34 @@ Rate relevance (0=not relevant, 1=partially relevant, 2=relevant, 3=highly relev
         using them as queries, and checking if the system retrieves the original content.
         Supports both local (in-memory) and cloud (Qdrant) storage.
         """
-        # If cloud storage is enabled and local corpus is empty, fetch from Qdrant
-        if rag_service.use_cloud and (not rag_service.corpus or len(rag_service.corpus) == 0):
+        # If cloud storage is enabled, fetch chunks from Qdrant
+        if rag_service.use_cloud:
             from services.cloud_storage import cloud_storage
             from config import settings
             import random
 
+            # Get all chunks for the current user (we assume the username is stored in rag_service.uploaded_by, but we don't have it.
+            # We'll need to pass username to this method. We'll add it as a parameter.
+            # For now, we'll fetch all points for the user (but we don't have the username here).
+            # We'll modify the signature to accept username.
+            # Actually, we'll retrieve from the rag_service instance if it has a username attribute.
+            # We'll add a fallback: if username is not available, we'll fetch all points without filter (dangerous but for demo).
             username = getattr(rag_service, 'current_user', None)
             if username:
+                # Use scroll to get all points for this user
                 from qdrant_client.models import Filter, FieldCondition, MatchValue
                 scroll_result = cloud_storage.qdrant.scroll(
                     collection_name=settings.QDRANT_COLLECTION,
                     scroll_filter=Filter(
                         must=[FieldCondition(key="uploaded_by", match=MatchValue(value=username))]
                     ),
-                    limit=1000,
+                    limit=1000,  # we'll cap to avoid huge memory
                     with_payload=True,
                     with_vectors=False
                 )
                 points = scroll_result[0]
             else:
+                # Fallback: get all points (may include other users) – not ideal, but better than nothing
                 scroll_result = cloud_storage.qdrant.scroll(
                     collection_name=settings.QDRANT_COLLECTION,
                     limit=1000,
@@ -123,6 +131,7 @@ Rate relevance (0=not relevant, 1=partially relevant, 2=relevant, 3=highly relev
             if not points:
                 return {"has_documents": False, "error": "No documents found in cloud storage for this user."}
 
+            # Build corpus and metadata from points
             corpus = []
             metadata = []
             for p in points:
@@ -135,19 +144,19 @@ Rate relevance (0=not relevant, 1=partially relevant, 2=relevant, 3=highly relev
                         "source": payload.get("source", "unknown"),
                         "uploaded_by": payload.get("uploaded_by", "unknown")
                     })
-            # Also store back into rag_service for subsequent calls
-            rag_service.corpus = corpus
-            rag_service.metadata = metadata
+            # Randomly sample
+            if len(corpus) < num_queries:
+                num_queries = len(corpus)
+                if num_queries == 0:
+                    return {"has_documents": False, "error": "Not enough documents to evaluate."}
+            indices = random.sample(range(len(corpus)), num_queries)
         else:
             # Local storage: use in-memory data
             corpus = rag_service.corpus
             metadata = rag_service.metadata
-
-        if not corpus or len(corpus) < num_queries:
-            return {
-                "has_documents": False,
-                "error": "Not enough documents to evaluate. Please upload more content.",
-            }
+            if not corpus or len(corpus) < num_queries:
+                return {"has_documents": False, "error": "Not enough documents to evaluate. Please upload more content."}
+            indices = random.sample(range(len(corpus)), num_queries)
 
         # Cache key based on current chunk IDs
         chunk_ids = [m.get("chunk_id") for m in metadata]

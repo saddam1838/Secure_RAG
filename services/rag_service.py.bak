@@ -1,0 +1,159 @@
+import hashlib
+import uuid
+import os
+from typing import List, Dict, Optional
+from services.cloud_storage import cloud_storage
+from config import settings
+
+class RAGService:
+    def __init__(self):
+        self.use_cloud = cloud_storage.is_cloud_enabled
+        self.vector_store = None
+        self.metadata = []
+        self.processed_hashes = set()
+        self.chunk_hashes = set()
+        self.corpus = []  # List of chunks for RAG evaluator
+        
+        if not self.use_cloud:
+            try:
+                from services.vector_store import LocalVectorStore
+                self.vector_store = LocalVectorStore()
+            except Exception as e:
+                print(f"⚠️ Local vector store not available: {e}")
+
+    def _chunk_document(self, content: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
+        chunks = []
+        start = 0
+        while start < len(content):
+            end = start + chunk_size
+            chunk = content[start:end]
+            if chunk.strip():
+                chunks.append(chunk)
+            start = end - overlap
+        return chunks
+
+    def _get_embeddings(self, texts: List[str]) -> List[List[float]]:
+        try:
+            from services.embedder import embedder
+            return embedder.encode(texts).tolist()
+        except Exception as e:
+            print(f"❌ Embedding generation failed: {e}")
+            return [[0.0] * 384 for _ in texts]
+
+    def add_document(self, content: str, metadata: Dict = None, uploaded_by: str = "admin"):
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        exists = cloud_storage.document_exists_for_user(content_hash, uploaded_by)
+        if self.use_cloud and exists:
+            print(f"ℹ️ Document already exists for user '{uploaded_by}'")
+            return
+        if not self.use_cloud and content_hash in self.processed_hashes:
+            return
+
+        chunks = self._chunk_document(content)
+        if not chunks:
+            return
+
+        unique_chunks = []
+        for chunk in chunks:
+            h = hashlib.md5(chunk.encode()).hexdigest()
+            key = (h, uploaded_by)
+            if key not in self.chunk_hashes:
+                self.chunk_hashes.add(key)
+                unique_chunks.append(chunk)
+
+        if not unique_chunks:
+            print(f"⚠️ All chunks already exist for user '{uploaded_by}'")
+            return
+
+        embeddings = self._get_embeddings(unique_chunks)
+        base_meta = metadata or {"source": "unknown"}
+
+        meta_list = [
+            {
+                "text": chunk,
+                "source": base_meta.get("source", "unknown"),
+                "category": base_meta.get("category", "general"),
+                "chunk_id": f"{uploaded_by}-{hashlib.md5(chunk.encode()).hexdigest()}",
+                "uploaded_by": uploaded_by,
+            }
+            for chunk in unique_chunks
+        ]
+
+        if self.use_cloud:
+            print(f"☁️ Saving {len(unique_chunks)} chunks to CLOUD storage for '{uploaded_by}'")
+            
+            success, msg = cloud_storage.save_document(
+                filename=base_meta.get("source", "unknown"),
+                content_hash=content_hash,
+                content=content,
+                size_mb=len(content.encode("utf-8")) / (1024 * 1024),
+                uploaded_by=uploaded_by,
+                is_safe=True,
+                scan_issues=[],
+            )
+
+            if success:
+                doc_result = cloud_storage.supabase.table("documents").select("id").eq("file_hash", f"{uploaded_by}_{content_hash}").execute()
+                document_id = doc_result.data[0]['id'] if doc_result.data else str(uuid.uuid4())
+
+                print(f"🔥 Storing {len(unique_chunks)} chunks in Qdrant...")
+                cloud_storage.store_vectors(
+                    embeddings=embeddings,
+                    metadatas=meta_list,
+                    document_id=document_id,
+                    uploaded_by=uploaded_by
+                )
+                print(f"✅ SUCCESS: Saved to Supabase and {len(unique_chunks)} chunks to Qdrant.")
+                
+                # 🔥 FIX: Populate corpus and metadata for RAG evaluator in cloud mode
+                self.corpus.extend(unique_chunks)
+                self.metadata.extend(meta_list)
+            else:
+                print(f"❌ Failed to save to cloud: {msg}")
+        else:
+            print("💻 Saving to LOCAL storage")
+            if self.vector_store:
+                self.vector_store.add(unique_chunks, embeddings)
+            self.metadata.extend(meta_list)
+            self.processed_hashes.add(content_hash)
+            print(f"✅ Saved {len(unique_chunks)} chunks to local memory")
+
+    def remove_document_from_memory(self, filename: str):
+        if not self.use_cloud:
+            self.metadata = [m for m in self.metadata if m.get("source") != filename]
+            if filename in self.corpus:
+                del self.corpus[filename]
+            print(f"🗑️ Removed {filename} from local memory")
+
+    def search(self, query: str, uploaded_by: str = "admin", top_k: int = 5) -> List[Dict]:
+        if self.use_cloud:
+            try:
+                from qdrant_client.models import Filter, FieldCondition, MatchValue
+                query_embedding = self._get_embeddings([query])[0]
+                
+                results = cloud_storage.qdrant.search(
+                    collection_name=settings.QDRANT_COLLECTION,
+                    query_vector=query_embedding,
+                    query_filter=Filter(
+                        must=[FieldCondition(key="uploaded_by", match=MatchValue(value=uploaded_by))]
+                    ),
+                    limit=top_k
+                )
+                
+                return [{"text": hit.payload.get("text", ""), "source": hit.payload.get("source", "unknown"), "score": hit.score} for hit in results]
+            except Exception as e:
+                print(f"❌ Cloud search failed: {e}")
+                return []
+        else:
+            if not self.vector_store:
+                return []
+            try:
+                query_embedding = self._get_embeddings([query])[0]
+                results = self.vector_store.search(query_embedding, top_k)
+                return [{"text": chunk, "source": meta.get("source", "unknown"), "score": score} for chunk, meta, score in results]
+            except Exception as e:
+                print(f"❌ Local search failed: {e}")
+                return []
+
+rag_service = RAGService()

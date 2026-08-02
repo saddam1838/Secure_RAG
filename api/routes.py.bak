@@ -41,6 +41,7 @@ config_manager = ConfigManager()
 async def react_login(req: LoginRequest):
     success, msg, role = authenticate_user(req.username, req.password)
     if not success:
+        # 🔥 IMPROVED: Clear error message for first-time users
         if "not found" in msg.lower() or "does not exist" in msg.lower():
             raise HTTPException(
                 status_code=401, 
@@ -54,12 +55,8 @@ async def react_login(req: LoginRequest):
         else:
             raise HTTPException(status_code=401, detail=f"❌ {msg}")
     
+    # 🔥 CRITICAL: Include role in JWT token for RBAC
     token = create_access_token({"sub": req.username, "role": role})
-    
-    # 🔥 Load user's data into local memory (FAISS + corpus) for fast access
-    global rag
-    rag.load_user_data(req.username)
-    
     return {"access_token": token, "token_type": "bearer", "username": req.username, "role": role}
 
 @app.post("/api/auth/register")
@@ -120,7 +117,8 @@ async def upload_and_index(file: UploadFile = File(...), user: str = Depends(get
         report = doc_scan(content, file.filename)
         size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
         
-        # Document metadata saving is handled by rag.add_document() below.
+        # Document metadata saving is now handled by rag.add_document() below.
+        
         if not report["is_safe"]:
             audit.log(user, "document_blocked", {
                 "filename": file.filename,
@@ -163,6 +161,7 @@ async def delete_document(doc_id: str, user: str = Depends(get_current_user)):
     filename = None
     
     if cloud_storage.is_cloud_enabled:
+        # 🔥 CRITICAL: Get filename BEFORE deleting from Supabase
         try:
             res = cloud_storage.supabase.table("documents").select("filename").eq("id", doc_id).eq("uploaded_by", user).execute()
             if res.data:
@@ -171,14 +170,17 @@ async def delete_document(doc_id: str, user: str = Depends(get_current_user)):
         except Exception as e:
             print(f"⚠️ Could not fetch filename: {e}")
         
+        # Delete from Supabase AND Qdrant (chunks)
         success, msg = cloud_storage.delete_document(doc_id, user)
         
         if success and filename:
+            # 🔥 CRITICAL: Also remove from in-memory corpus
             rag.remove_document_from_memory(os.path.basename(filename))
             print(f"✅ Deleted from Supabase, Qdrant, and in-memory corpus: {filename}")
         
         return {"success": success, "message": msg}
     else:
+        # Local storage - just remove from FAISS
         rag.remove_document_from_memory(doc_id)
         return {"success": True, "message": f"Deleted {doc_id}"}
 
@@ -301,11 +303,7 @@ async def evaluate(user: str = Depends(get_current_user)):
     from services.cloud_storage import cloud_storage
     has_docs = False
     if cloud_storage.is_cloud_enabled:
-        result = cloud_storage.supabase.table("documents")\
-            .select("id", count="exact")\
-            .eq("uploaded_by", user)\
-            .eq("is_safe", True)\
-            .execute()
+        result = cloud_storage.supabase.table("documents")            .select("id", count="exact")            .eq("uploaded_by", user)            .eq("is_safe", True)            .execute()
         has_docs = (result.count > 0) if hasattr(result, 'count') else len(result.data) > 0
     else:
         user_docs = [m for m in rag.metadata if m.get("uploaded_by") == user]
@@ -314,10 +312,8 @@ async def evaluate(user: str = Depends(get_current_user)):
     if not has_docs:
         return {"has_documents": False, "error": f"No safe documents found for '{user}'. Please upload documents first."}
     
-    # Ensure local corpus is loaded
-    if len(rag.corpus) == 0:
-        rag.load_user_data(user)
-    
+    # Set current user for rag_service
+    rag.current_user = user
     evaluator = LLMJudgeEvaluator()
     return evaluator.run_dynamic_evaluation(rag, num_queries=3, k=3)
 
@@ -349,6 +345,7 @@ async def scan_document_only(file: UploadFile = File(...), user: str = Depends(g
         report = doc_scan(content, file.filename)
         size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
         
+        # 🔥 FIX: Save blocked documents to Supabase for dashboard tracking
         if not report["is_safe"]:
             from services.cloud_storage import cloud_storage
             if cloud_storage.is_cloud_enabled:
@@ -356,7 +353,7 @@ async def scan_document_only(file: UploadFile = File(...), user: str = Depends(g
                 cloud_storage.save_document(
                     filename=file.filename,
                     content_hash=content_hash,
-                    content=content[:1000],
+                    content=content[:1000],  # Preview only
                     size_mb=size_mb,
                     uploaded_by=user,
                     is_safe=False,

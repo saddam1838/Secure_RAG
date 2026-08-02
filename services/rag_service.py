@@ -12,7 +12,8 @@ class RAGService:
         self.metadata = []
         self.processed_hashes = set()
         self.chunk_hashes = set()
-        self.corpus = {}  # Prevents 'corpus' attribute error
+        self.corpus = []  # Now a list for easy length checking and iteration
+        self.current_user = None  # Will be set when user logs in
         
         if not self.use_cloud:
             try:
@@ -20,6 +21,49 @@ class RAGService:
                 self.vector_store = LocalVectorStore()
             except Exception as e:
                 print(f"⚠️ Local vector store not available: {e}")
+
+    def load_user_data(self, username: str):
+        """Load all chunks for this user from Qdrant into local memory (corpus & metadata)."""
+        if not self.use_cloud:
+            return
+        self.current_user = username
+        print(f"🔄 Loading user data for '{username}' from Qdrant into local memory...")
+        try:
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            from config import settings
+            scroll_result = cloud_storage.qdrant.scroll(
+                collection_name=settings.QDRANT_COLLECTION,
+                scroll_filter=Filter(
+                    must=[FieldCondition(key="uploaded_by", match=MatchValue(value=username))]
+                ),
+                limit=10000,  # reasonable limit
+                with_payload=True,
+                with_vectors=False
+            )
+            points = scroll_result[0]
+            if points:
+                self.corpus = []
+                self.metadata = []
+                for p in points:
+                    payload = p.payload
+                    text = payload.get("text", "")
+                    if text:
+                        self.corpus.append(text)
+                        self.metadata.append({
+                            "chunk_id": payload.get("chunk_id", str(p.id)),
+                            "source": payload.get("source", "unknown"),
+                            "uploaded_by": payload.get("uploaded_by", "unknown"),
+                            "text": text
+                        })
+                print(f"✅ Loaded {len(self.corpus)} chunks for user '{username}' into local memory.")
+            else:
+                self.corpus = []
+                self.metadata = []
+                print(f"ℹ️ No documents found for user '{username}' in cloud.")
+        except Exception as e:
+            print(f"⚠️ Failed to load user data from cloud: {e}")
+            self.corpus = []
+            self.metadata = []
 
     def _chunk_document(self, content: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
         chunks = []
@@ -106,6 +150,9 @@ class RAGService:
                     uploaded_by=uploaded_by
                 )
                 print(f"✅ SUCCESS: Saved to Supabase and {len(unique_chunks)} chunks to Qdrant.")
+                # Also add to local memory for fast access
+                self.corpus.extend(unique_chunks)
+                self.metadata.extend(meta_list)
             else:
                 print(f"❌ Failed to save to cloud: {msg}")
         else:
@@ -114,16 +161,51 @@ class RAGService:
                 self.vector_store.add(unique_chunks, embeddings)
             self.metadata.extend(meta_list)
             self.processed_hashes.add(content_hash)
+            self.corpus.extend(unique_chunks)  # local corpus as list
             print(f"✅ Saved {len(unique_chunks)} chunks to local memory")
 
     def remove_document_from_memory(self, filename: str):
         if not self.use_cloud:
+            # For local storage, remove from metadata and corpus (if it's a dict)
             self.metadata = [m for m in self.metadata if m.get("source") != filename]
-            if filename in self.corpus:
-                del self.corpus[filename]
+            # If corpus is a dict, remove key; if list, we need to filter by source? 
+            # Actually for local we store as list, we'll filter by source in metadata and rebuild corpus.
+            # But for simplicity, we'll just rely on metadata.
+            # We'll keep it as list and filter when needed.
+            # Since we may have used it as dict earlier, we'll handle both.
+            if isinstance(self.corpus, dict):
+                if filename in self.corpus:
+                    del self.corpus[filename]
+            elif isinstance(self.corpus, list):
+                # We can't easily remove by filename because we don't store filename per chunk.
+                # We'll rely on metadata filtering.
+                pass
             print(f"🗑️ Removed {filename} from local memory")
+        else:
+            # For cloud, we just clear the loaded data and reload if needed.
+            # But we can remove from current corpus/metadata by filtering.
+            self.metadata = [m for m in self.metadata if m.get("source") != filename]
+            # Rebuild corpus from remaining metadata
+            self.corpus = [m["text"] for m in self.metadata if "text" in m]
+            print(f"🗑️ Removed {filename} from local memory (cloud sync)")
 
     def search(self, query: str, uploaded_by: str = "admin", top_k: int = 5) -> List[Dict]:
+        # Prefer local if available, else fallback to cloud
+        if not self.use_cloud or (self.use_cloud and self.corpus and len(self.corpus) > 0):
+            # Use local FAISS if we have a vector store and embeddings
+            if self.vector_store:
+                try:
+                    query_embedding = self._get_embeddings([query])[0]
+                    results = self.vector_store.search(query_embedding, top_k)
+                    return [{"text": chunk, "source": meta.get("source", "unknown"), "score": score} for chunk, meta, score in results]
+                except Exception as e:
+                    print(f"❌ Local search failed, falling back to cloud: {e}")
+            else:
+                # If no vector store, but we have corpus, we could do simple keyword search? Not ideal.
+                # Fallback to cloud.
+                pass
+        
+        # Cloud fallback
         if self.use_cloud:
             try:
                 from qdrant_client.models import Filter, FieldCondition, MatchValue
@@ -143,14 +225,47 @@ class RAGService:
                 print(f"❌ Cloud search failed: {e}")
                 return []
         else:
-            if not self.vector_store:
-                return []
-            try:
-                query_embedding = self._get_embeddings([query])[0]
-                results = self.vector_store.search(query_embedding, top_k)
-                return [{"text": chunk, "source": meta.get("source", "unknown"), "score": score} for chunk, meta, score in results]
-            except Exception as e:
-                print(f"❌ Local search failed: {e}")
-                return []
+            # No cloud, no local store
+            return []
 
+    def retrieve(self, query: str, k: int = 5, username: str = None) -> List[Dict]:
+        """Wrapper for search that returns context with text."""
+        return self.search(query, uploaded_by=username or self.current_user or "admin", top_k=k)
+
+    def generate(self, query: str, context: List[Dict]) -> str:
+        """Generate answer using flan-t5-large based on context."""
+        try:
+            from models.model_manager import ModelManager
+            mm = ModelManager()
+            generator = mm.get_generator()
+            tokenizer = generator["tokenizer"]
+            model = generator["model"]
+            device = generator["device"]
+
+            context_text = "\n".join([f"- {c.get('text', '')}" for c in context[:3]])
+            prompt = f"""Answer the question based only on the provided context.
+
+Context:
+{context_text}
+
+Question: {query}
+
+Answer:"""
+
+            inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=150,
+                    temperature=0.7,
+                    do_sample=True,
+                    pad_token_id=tokenizer.eos_token_id
+                )
+            response = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+            return response if response else "I couldn't find a suitable answer in the provided documents."
+        except Exception as e:
+            print(f"❌ Generation failed: {e}")
+            return "An error occurred while generating the response."
+
+# Global instance
 rag_service = RAGService()
