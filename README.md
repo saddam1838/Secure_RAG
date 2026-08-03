@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🔐 Enterprise Secure RAG[![Live Demo](https://img.shields.io/badge/Live_Demo-Visit_App-10b981?style=for-the-badge&logo=googlechrome&logoColor=white)](https://secure-rag.saddam.dev/)
+# 🔐 Enterprise Secure RAG [![Live Demo](https://img.shields.io/badge/Live_Demo-Try_it-10b981?style=for-the-badge&logo=googlechrome&logoColor=white)](https://secure-rag.saddam.dev/)
 
 ### A Secure Retrieval-Augmented Generation (RAG) Platform with Multi-Layer AI Security
 
